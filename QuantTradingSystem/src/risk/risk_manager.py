@@ -63,39 +63,54 @@ class RiskCheckResult:
 
 @dataclass
 class RiskManagerConfig:
-    """风控配置"""
-    # 单笔风险
-    max_loss_per_trade: float = 0.02       # 单笔最大亏损比例
-    max_order_value: float = 0.10          # 单笔最大委托金额比例
+    """风控配置 - 优化版本"""
+    # 单笔风险（更保守）
+    max_loss_per_trade: float = 0.015      # 单笔最大亏损1.5%（从2%降低）
+    max_order_value: float = 0.08          # 单笔最大委托8%（从10%降低）
     
     # 日内风险
-    max_daily_loss: float = 0.05           # 日内最大亏损比例
-    max_daily_trades: int = 50             # 日内最大交易次数
-    max_daily_turnover: float = 5.0        # 日内最大换手率
+    max_daily_loss: float = 0.04           # 日内最大亏损4%（从5%降低）
+    max_daily_trades: int = 30             # 日内最大交易30次（从50降低）
+    max_daily_turnover: float = 3.0        # 日内最大换手率3倍（从5降低）
     
-    # 仓位风险
-    max_position_per_symbol: float = 0.15  # 单品种最大仓位比例
-    max_total_position: float = 0.80       # 总仓位上限
-    max_correlated_exposure: float = 0.30  # 相关品种最大敞口
+    # 仓位风险（更分散）
+    max_position_per_symbol: float = 0.12  # 单品种最大12%（从15%降低）
+    max_total_position: float = 0.70       # 总仓位70%（从80%降低）
+    max_correlated_exposure: float = 0.25  # 相关品种最大25%（从30%降低）
     
-    # 杠杆风险
-    max_leverage: float = 3.0              # 最大杠杆倍数
+    # 杠杆风险（更保守）
+    max_leverage: float = 2.5              # 最大杠杆2.5倍（从3倍降低）
     
     # 流动性风险
-    min_volume_threshold: int = 2000       # 最小成交量阈值
-    max_volume_participation: float = 0.05 # 最大成交量占比
+    min_volume_threshold: int = 3000       # 最小成交量3000（从2000提高）
+    max_volume_participation: float = 0.03 # 最大成交量占比3%（从5%降低）
     
-    # 回撤风险
-    max_drawdown: float = 0.10             # 最大回撤阈值
-    drawdown_reduce_ratio: float = 0.5     # 回撤达阈值时减仓比例
+    # 回撤风险（更严格）
+    max_drawdown: float = 0.08             # 最大回撤8%（从10%降低）
+    drawdown_reduce_ratio: float = 0.6     # 回撤达阈值时减仓60%（从50%提高）
+    drawdown_warning_ratio: float = 0.6    # 回撤预警阈值（60%时开始警告）
     
     # 波动风险
-    volatility_scaling: bool = True        # 是否启用波动率缩放
-    max_volatility_multiple: float = 2.0   # 最大波动率倍数
+    volatility_scaling: bool = True        # 启用波动率缩放
+    max_volatility_multiple: float = 1.5   # 最大波动率倍数1.5（从2降低）
+    min_volatility_multiple: float = 0.5   # 最小波动率倍数
     
-    # 熔断配置
+    # 熔断配置（更敏感）
     circuit_breaker_enabled: bool = True
-    circuit_breaker_threshold: float = 0.07  # 触发熔断的亏损比例
+    circuit_breaker_threshold: float = 0.06  # 6%亏损触发熔断（从7%降低）
+    circuit_breaker_duration_hours: int = 24 # 熔断持续24小时
+    
+    # 连续亏损控制
+    max_consecutive_losses: int = 4        # 最大连续亏损次数
+    consecutive_loss_reduce_ratio: float = 0.5  # 连续亏损时减仓50%
+    
+    # 盈利保护
+    profit_protection_threshold: float = 0.10  # 盈利10%后启用保护
+    profit_protection_ratio: float = 0.50      # 保护50%已有盈利
+    
+    # 相关性控制
+    correlation_check_enabled: bool = True
+    max_correlation_threshold: float = 0.7  # 相关性超过0.7时限制开仓
 
 
 # ==================== 仓位管理器 ====================
