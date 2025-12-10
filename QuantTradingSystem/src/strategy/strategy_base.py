@@ -242,7 +242,7 @@ class BaseStrategy(ABC):
         return result
     
     def atr(self, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-        """平均真实波幅"""
+        """平均真实波幅 - 使用EMA提升灵敏度"""
         if len(high) < 2:
             return np.array([np.nan] * len(high))
         
@@ -255,8 +255,65 @@ class BaseStrategy(ABC):
             lc = abs(low[i] - close[i - 1])
             tr[i] = max(hl, hc, lc)
         
-        atr_values = self.sma(tr, period)
+        # 使用EMA而非SMA，更快响应市场变化
+        atr_values = self.ema(tr, period)
         return atr_values
+    
+    def detect_market_regime(self, closes: np.ndarray, period: int = 20) -> str:
+        """
+        检测市场状态
+        Returns: 'trending_up', 'trending_down', 'ranging', 'volatile'
+        """
+        if len(closes) < period:
+            return 'unknown'
+        
+        # 计算收益率
+        returns = np.diff(closes[-period:]) / closes[-period:-1]
+        
+        # 趋势强度 - 收益率均值
+        trend_strength = np.mean(returns)
+        # 波动率
+        volatility = np.std(returns)
+        # ADX风格的方向指标
+        positive_moves = np.sum(returns > 0) / len(returns)
+        
+        # 波动率阈值（年化20%对应日波动1.26%）
+        high_vol_threshold = 0.015
+        trend_threshold = 0.001
+        
+        if volatility > high_vol_threshold:
+            return 'volatile'
+        elif trend_strength > trend_threshold and positive_moves > 0.6:
+            return 'trending_up'
+        elif trend_strength < -trend_threshold and positive_moves < 0.4:
+            return 'trending_down'
+        else:
+            return 'ranging'
+    
+    def calculate_volatility_percentile(self, closes: np.ndarray, period: int = 60) -> float:
+        """
+        计算当前波动率在历史中的分位数
+        用于动态调整风险参数
+        """
+        if len(closes) < period + 20:
+            return 0.5
+        
+        returns = np.diff(closes) / closes[:-1]
+        
+        # 计算滚动波动率
+        rolling_vol = []
+        for i in range(20, len(returns)):
+            vol = np.std(returns[i-20:i])
+            rolling_vol.append(vol)
+        
+        if len(rolling_vol) < 2:
+            return 0.5
+        
+        current_vol = rolling_vol[-1]
+        # 计算分位数
+        percentile = np.sum(np.array(rolling_vol) <= current_vol) / len(rolling_vol)
+        
+        return percentile
     
     def rsi(self, data: np.ndarray, period: int = 14) -> np.ndarray:
         """相对强弱指标"""
