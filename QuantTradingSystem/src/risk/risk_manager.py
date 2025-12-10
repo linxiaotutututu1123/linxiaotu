@@ -313,21 +313,16 @@ class RiskManager:
         current_bar: Optional[BarData] = None
     ) -> RiskCheckResult:
         """
-        事前风控 - 订单提交前检查
-        
-        Args:
-            order: 待提交订单
-            account: 账户信息
-            positions: 当前持仓
-            current_bar: 当前K线数据
-        
-        Returns:
-            RiskCheckResult
+        事前风控 - 订单提交前检查（增强版）
         """
         result = RiskCheckResult()
         
         # 0. 熔断检查
         if self._check_circuit_breaker(result):
+            return result
+        
+        # 0.1 连续亏损检查
+        if self._check_consecutive_losses(result):
             return result
         
         # 1. 资金检查
@@ -361,8 +356,14 @@ class RiskManager:
         if not result.passed:
             return result
         
-        # 7. 相关性风险检查
-        self._check_correlation_risk(order, positions, result)
+        # 7. 相关性风险检查（增强）
+        if self.config.correlation_check_enabled:
+            self._check_correlation_risk_enhanced(order, account, positions, result)
+            if not result.passed:
+                return result
+        
+        # 8. 盈利保护检查
+        self._check_profit_protection(account, result)
         
         return result
     
