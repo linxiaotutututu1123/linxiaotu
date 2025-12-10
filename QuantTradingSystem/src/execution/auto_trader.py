@@ -12,12 +12,15 @@ from enum import Enum
 import logging
 import time
 
-from ..data.data_structures import (
+import sys
+sys.path.append('..')
+
+from data.data_structures import (
     BarData, SignalData, OrderData, PositionData,
     Direction, OrderType
 )
-from ..strategy.strategy_base import BaseStrategy
-from ..risk.risk_manager import RiskManager, RiskCheckResult
+from strategy.strategy_base import BaseStrategy
+from risk.risk_manager import RiskManager, RiskCheckResult
 
 logger = logging.getLogger(__name__)
 

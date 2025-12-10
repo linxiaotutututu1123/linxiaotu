@@ -63,54 +63,39 @@ class RiskCheckResult:
 
 @dataclass
 class RiskManagerConfig:
-    """风控配置 - 优化版本"""
-    # 单笔风险（更保守）
-    max_loss_per_trade: float = 0.015      # 单笔最大亏损1.5%（从2%降低）
-    max_order_value: float = 0.08          # 单笔最大委托8%（从10%降低）
+    """风控配置"""
+    # 单笔风险
+    max_loss_per_trade: float = 0.02       # 单笔最大亏损比例
+    max_order_value: float = 0.10          # 单笔最大委托金额比例
     
     # 日内风险
-    max_daily_loss: float = 0.04           # 日内最大亏损4%（从5%降低）
-    max_daily_trades: int = 30             # 日内最大交易30次（从50降低）
-    max_daily_turnover: float = 3.0        # 日内最大换手率3倍（从5降低）
+    max_daily_loss: float = 0.05           # 日内最大亏损比例
+    max_daily_trades: int = 50             # 日内最大交易次数
+    max_daily_turnover: float = 5.0        # 日内最大换手率
     
-    # 仓位风险（更分散）
-    max_position_per_symbol: float = 0.12  # 单品种最大12%（从15%降低）
-    max_total_position: float = 0.70       # 总仓位70%（从80%降低）
-    max_correlated_exposure: float = 0.25  # 相关品种最大25%（从30%降低）
+    # 仓位风险
+    max_position_per_symbol: float = 0.15  # 单品种最大仓位比例
+    max_total_position: float = 0.80       # 总仓位上限
+    max_correlated_exposure: float = 0.30  # 相关品种最大敞口
     
-    # 杠杆风险（更保守）
-    max_leverage: float = 2.5              # 最大杠杆2.5倍（从3倍降低）
+    # 杠杆风险
+    max_leverage: float = 3.0              # 最大杠杆倍数
     
     # 流动性风险
-    min_volume_threshold: int = 3000       # 最小成交量3000（从2000提高）
-    max_volume_participation: float = 0.03 # 最大成交量占比3%（从5%降低）
+    min_volume_threshold: int = 2000       # 最小成交量阈值
+    max_volume_participation: float = 0.05 # 最大成交量占比
     
-    # 回撤风险（更严格）
-    max_drawdown: float = 0.08             # 最大回撤8%（从10%降低）
-    drawdown_reduce_ratio: float = 0.6     # 回撤达阈值时减仓60%（从50%提高）
-    drawdown_warning_ratio: float = 0.6    # 回撤预警阈值（60%时开始警告）
+    # 回撤风险
+    max_drawdown: float = 0.10             # 最大回撤阈值
+    drawdown_reduce_ratio: float = 0.5     # 回撤达阈值时减仓比例
     
     # 波动风险
-    volatility_scaling: bool = True        # 启用波动率缩放
-    max_volatility_multiple: float = 1.5   # 最大波动率倍数1.5（从2降低）
-    min_volatility_multiple: float = 0.5   # 最小波动率倍数
+    volatility_scaling: bool = True        # 是否启用波动率缩放
+    max_volatility_multiple: float = 2.0   # 最大波动率倍数
     
-    # 熔断配置（更敏感）
+    # 熔断配置
     circuit_breaker_enabled: bool = True
-    circuit_breaker_threshold: float = 0.06  # 6%亏损触发熔断（从7%降低）
-    circuit_breaker_duration_hours: int = 24 # 熔断持续24小时
-    
-    # 连续亏损控制
-    max_consecutive_losses: int = 4        # 最大连续亏损次数
-    consecutive_loss_reduce_ratio: float = 0.5  # 连续亏损时减仓50%
-    
-    # 盈利保护
-    profit_protection_threshold: float = 0.10  # 盈利10%后启用保护
-    profit_protection_ratio: float = 0.50      # 保护50%已有盈利
-    
-    # 相关性控制
-    correlation_check_enabled: bool = True
-    max_correlation_threshold: float = 0.7  # 相关性超过0.7时限制开仓
+    circuit_breaker_threshold: float = 0.07  # 触发熔断的亏损比例
 
 
 # ==================== 仓位管理器 ====================
@@ -143,46 +128,31 @@ class PositionSizer:
     
     def calculate_kelly_fraction(self, strategy_name: str) -> float:
         """
-        计算Kelly最优仓位比例 - 改进版
+        计算Kelly最优仓位比例
         
         Kelly公式: f* = (p * b - q) / b
-        考虑估计误差，使用更保守的分数Kelly
+        其中: p=胜率, q=败率, b=盈亏比
         """
         stats = self._strategy_stats.get(strategy_name)
-        if not stats or stats["win_rate"] == 0:
-            return 0.01  # 默认1%仓位（更保守）
+        if not stats:
+            return 0.02  # 默认2%仓位
         
         p = stats["win_rate"]
         q = 1 - p
+        b = stats["profit_factor"]
         
-        # 使用盈亏比而非profit_factor
-        if stats["avg_loss"] == 0:
-            return 0.01
+        if b <= 0:
+            return 0
         
-        b = abs(stats["avg_win"] / stats["avg_loss"])
-        
-        if b <= 0 or p <= 0:
-            return 0.01
-        
-        # Kelly公式
         kelly = (p * b - q) / b
         
-        # 考虑估计误差：样本量越小，越保守
-        # 假设至少需要30个样本才能合理估计
-        sample_adj = min(1.0, self.trade_count.get(strategy_name, 10) / 30.0)
+        # 使用半Kelly（更保守）
+        kelly = kelly * 0.5
         
-        # 使用1/4 Kelly（更保守，减少方差）
-        kelly = kelly * 0.25 * sample_adj
-        
-        # 严格限制范围
-        kelly = max(0.005, min(kelly, 0.15))
+        # 限制范围
+        kelly = max(0.01, min(kelly, 0.25))
         
         return kelly
-    
-    @property
-    def trade_count(self) -> Dict[str, int]:
-        """获取各策略交易次数"""
-        return getattr(self, '_trade_counts', {})
     
     def calculate_volatility_adjusted_size(
         self,
@@ -283,11 +253,6 @@ class RiskManager:
         # 回撤追踪
         self._peak_balance: float = 0
         self._current_drawdown: float = 0
-        self._protected_profit: float = 0  # 受保护的利润
-        
-        # 连续亏损追踪
-        self._consecutive_losses: int = 0
-        self._last_trade_profit: float = 0
         
         # 品种相关性矩阵
         self._correlation_matrix: Dict[str, Dict[str, float]] = {}
@@ -298,12 +263,6 @@ class RiskManager:
         
         # 风险事件日志
         self._risk_events: List[Dict] = []
-        
-        # 仓位快照（用于计算相关性风险）
-        self._position_snapshot: Dict[str, float] = {}
-        
-        # 交易统计（用于Kelly公式）
-        self._trade_counts: Dict[str, int] = {}
     
     def check_order(
         self,
@@ -313,16 +272,21 @@ class RiskManager:
         current_bar: Optional[BarData] = None
     ) -> RiskCheckResult:
         """
-        事前风控 - 订单提交前检查（增强版）
+        事前风控 - 订单提交前检查
+        
+        Args:
+            order: 待提交订单
+            account: 账户信息
+            positions: 当前持仓
+            current_bar: 当前K线数据
+        
+        Returns:
+            RiskCheckResult
         """
         result = RiskCheckResult()
         
         # 0. 熔断检查
         if self._check_circuit_breaker(result):
-            return result
-        
-        # 0.1 连续亏损检查
-        if self._check_consecutive_losses(result):
             return result
         
         # 1. 资金检查
@@ -356,14 +320,8 @@ class RiskManager:
         if not result.passed:
             return result
         
-        # 7. 相关性风险检查（增强）
-        if self.config.correlation_check_enabled:
-            self._check_correlation_risk_enhanced(order, account, positions, result)
-            if not result.passed:
-                return result
-        
-        # 8. 盈利保护检查
-        self._check_profit_protection(account, result)
+        # 7. 相关性风险检查
+        self._check_correlation_risk(order, positions, result)
         
         return result
     
@@ -578,111 +536,6 @@ class RiskManager:
         if sector_exposure > 0:
             result.add_message(f"注意: {order_sector}板块敞口较大")
     
-    def _check_consecutive_losses(self, result: RiskCheckResult) -> bool:
-        """检查连续亏损"""
-        if self._consecutive_losses >= self.config.max_consecutive_losses:
-            result.fail(
-                RiskAction.WARN,
-                RiskLevel.HIGH,
-                f"连续亏损{self._consecutive_losses}次，建议暂停交易或减小仓位"
-            )
-            result.suggested_volume = 0  # 建议停止交易
-            self._log_risk_event("CONSECUTIVE_LOSSES", {
-                "count": self._consecutive_losses
-            })
-            return True
-        elif self._consecutive_losses >= self.config.max_consecutive_losses * 0.75:
-            result.add_message(f"警告: 已连续亏损{self._consecutive_losses}次")
-        return False
-    
-    def _check_profit_protection(self, account: AccountData, result: RiskCheckResult):
-        """盈利保护检查"""
-        if self._peak_balance == 0:
-            return
-        
-        total_return = (account.balance - self._peak_balance) / self._peak_balance
-        
-        # 如果有足够盈利，启用保护
-        if total_return >= self.config.profit_protection_threshold:
-            # 计算受保护的利润
-            profit = account.balance - self._peak_balance
-            self._protected_profit = profit * self.config.profit_protection_ratio
-            
-            # 当前回撤如果侵蚀受保护利润，发出警告
-            current_profit = account.balance - self._peak_balance
-            if current_profit < self._protected_profit:
-                result.add_message(
-                    f"盈利保护警告: 当前盈利{current_profit:.2f}低于保护线{self._protected_profit:.2f}"
-                )
-                result.action = RiskAction.WARN
-                result.level = RiskLevel.MEDIUM
-    
-    def _check_correlation_risk_enhanced(
-        self,
-        order: OrderData,
-        account: AccountData,
-        positions: Dict[str, PositionData],
-        result: RiskCheckResult
-    ):
-        """增强的相关性风险检查"""
-        if order.offset != Offset.OPEN:
-            return
-        
-        # 定义板块及相关性
-        sectors = {
-            "黑色系": ["rb", "hc", "i", "j", "jm"],
-            "有色金属": ["cu", "al", "zn", "pb", "ni"],
-            "能源化工": ["sc", "bu", "fu", "ta", "ma", "eg"],
-            "农产品": ["c", "cs", "a", "m", "y", "p"],
-            "贵金属": ["au", "ag"],
-        }
-        
-        # 获取订单品种所属板块
-        symbol_lower = order.symbol.lower()
-        order_sector = None
-        for sector, symbols in sectors.items():
-            if any(s in symbol_lower for s in symbols):
-                order_sector = sector
-                break
-        
-        if not order_sector:
-            return
-        
-        # 计算同板块持仓价值
-        contract_size = 10
-        margin_ratio = 0.1
-        sector_exposure = 0
-        sector_count = 0
-        
-        for pos_symbol, pos in positions.items():
-            for s in sectors.get(order_sector, []):
-                if s in pos_symbol.lower():
-                    sector_exposure += pos.volume * pos.price * contract_size * margin_ratio
-                    sector_count += 1
-        
-        # 添加新订单
-        new_exposure = order.price * order.volume * contract_size * margin_ratio
-        total_sector_exposure = sector_exposure + new_exposure
-        
-        # 检查板块集中度
-        sector_ratio = total_sector_exposure / account.balance if account.balance > 0 else 0
-        
-        if sector_ratio > self.config.max_correlated_exposure:
-            result.fail(
-                RiskAction.REJECT,
-                RiskLevel.HIGH,
-                f"{order_sector}板块集中度过高: {sector_ratio:.2%} > {self.config.max_correlated_exposure:.2%}"
-            )
-            self._log_risk_event("SECTOR_CONCENTRATION", {
-                "sector": order_sector,
-                "ratio": sector_ratio,
-                "threshold": self.config.max_correlated_exposure
-            })
-        elif sector_ratio > self.config.max_correlated_exposure * 0.8:
-            result.add_message(f"警告: {order_sector}板块集中度{sector_ratio:.2%}接近上限")
-            result.action = RiskAction.WARN
-            result.level = RiskLevel.MEDIUM
-    
     def update_daily_stats(self, trade_pnl: float, turnover: float, current_date: datetime):
         """更新日内统计"""
         # 日期变化时重置
@@ -691,19 +544,10 @@ class RiskManager:
             self._daily_pnl = 0
             self._daily_turnover = 0
             self._daily_date = current_date
-            self._consecutive_losses = 0  # 每日重置连续亏损
         
         self._daily_trades += 1
         self._daily_pnl += trade_pnl
         self._daily_turnover += turnover
-        
-        # 更新连续亏损
-        if trade_pnl < 0:
-            self._consecutive_losses += 1
-        else:
-            self._consecutive_losses = 0
-        
-        self._last_trade_profit = trade_pnl
     
     def check_drawdown(self, current_balance: float) -> RiskCheckResult:
         """

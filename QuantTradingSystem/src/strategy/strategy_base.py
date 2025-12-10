@@ -242,7 +242,7 @@ class BaseStrategy(ABC):
         return result
     
     def atr(self, high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-        """平均真实波幅 - 使用EMA提升灵敏度"""
+        """平均真实波幅"""
         if len(high) < 2:
             return np.array([np.nan] * len(high))
         
@@ -255,65 +255,8 @@ class BaseStrategy(ABC):
             lc = abs(low[i] - close[i - 1])
             tr[i] = max(hl, hc, lc)
         
-        # 使用EMA而非SMA，更快响应市场变化
-        atr_values = self.ema(tr, period)
+        atr_values = self.sma(tr, period)
         return atr_values
-    
-    def detect_market_regime(self, closes: np.ndarray, period: int = 20) -> str:
-        """
-        检测市场状态
-        Returns: 'trending_up', 'trending_down', 'ranging', 'volatile'
-        """
-        if len(closes) < period:
-            return 'unknown'
-        
-        # 计算收益率
-        returns = np.diff(closes[-period:]) / closes[-period:-1]
-        
-        # 趋势强度 - 收益率均值
-        trend_strength = np.mean(returns)
-        # 波动率
-        volatility = np.std(returns)
-        # ADX风格的方向指标
-        positive_moves = np.sum(returns > 0) / len(returns)
-        
-        # 波动率阈值（年化20%对应日波动1.26%）
-        high_vol_threshold = 0.015
-        trend_threshold = 0.001
-        
-        if volatility > high_vol_threshold:
-            return 'volatile'
-        elif trend_strength > trend_threshold and positive_moves > 0.6:
-            return 'trending_up'
-        elif trend_strength < -trend_threshold and positive_moves < 0.4:
-            return 'trending_down'
-        else:
-            return 'ranging'
-    
-    def calculate_volatility_percentile(self, closes: np.ndarray, period: int = 60) -> float:
-        """
-        计算当前波动率在历史中的分位数
-        用于动态调整风险参数
-        """
-        if len(closes) < period + 20:
-            return 0.5
-        
-        returns = np.diff(closes) / closes[:-1]
-        
-        # 计算滚动波动率
-        rolling_vol = []
-        for i in range(20, len(returns)):
-            vol = np.std(returns[i-20:i])
-            rolling_vol.append(vol)
-        
-        if len(rolling_vol) < 2:
-            return 0.5
-        
-        current_vol = rolling_vol[-1]
-        # 计算分位数
-        percentile = np.sum(np.array(rolling_vol) <= current_vol) / len(rolling_vol)
-        
-        return percentile
     
     def rsi(self, data: np.ndarray, period: int = 14) -> np.ndarray:
         """相对强弱指标"""
@@ -412,53 +355,35 @@ class BaseStrategy(ABC):
 
 class DualMAStrategy(BaseStrategy):
     """
-    双均线策略 - 增强版
-    1. 添加趋势过滤器避免震荡市场
-    2. 使用多重确认减少假信号
-    3. 动态止损止盈
-    4. 仓位管理基于波动率
+    双均线策略
+    金叉做多，死叉做空
     """
     
     strategy_name = "DualMA"
     
     def __init__(
         self,
-        fast_period: int = 8,
-        slow_period: int = 21,
-        trend_period: int = 60,
-        atr_period: int = 14,
-        atr_stop_multiplier: float = 2.5,
-        atr_profit_multiplier: float = 4.0,
+        fast_period: int = 5,
+        slow_period: int = 20,
         symbols: List[str] = None
     ):
         super().__init__()
         self.fast_period = fast_period
         self.slow_period = slow_period
-        self.trend_period = trend_period
-        self.atr_period = atr_period
-        self.atr_stop_multiplier = atr_stop_multiplier
-        self.atr_profit_multiplier = atr_profit_multiplier
         self.symbols = symbols or []
         
         self.parameters = {
             "fast_period": fast_period,
-            "slow_period": slow_period,
-            "trend_period": trend_period,
-            "atr_stop_multiplier": atr_stop_multiplier
+            "slow_period": slow_period
         }
         
-        # 存储交易信息
-        self._last_ma_state: Dict[str, str] = {}
-        self._entry_prices: Dict[str, float] = {}
-        self._stop_losses: Dict[str, float] = {}
-        self._take_profits: Dict[str, float] = {}
-        self._trailing_highs: Dict[str, float] = {}
-        self._trailing_lows: Dict[str, float] = {}
+        # 存储上一次的均线状态
+        self._last_ma_state: Dict[str, str] = {}  # symbol -> "above" / "below"
     
     def on_init(self):
         super().on_init()
         for symbol in self.symbols:
-            self._bar_buffers[symbol] = DataBuffer(max_size=max(self.trend_period, self.slow_period) * 2)
+            self._bar_buffers[symbol] = DataBuffer(max_size=self.slow_period * 2)
     
     def on_bar(self, bars: Dict[str, BarData]):
         for symbol, bar in bars.items():
@@ -467,30 +392,24 @@ class DualMAStrategy(BaseStrategy):
             
             # 更新K线缓冲
             if symbol not in self._bar_buffers:
-                self._bar_buffers[symbol] = DataBuffer(max_size=max(self.trend_period, self.slow_period) * 2)
+                self._bar_buffers[symbol] = DataBuffer(max_size=self.slow_period * 2)
             self._bar_buffers[symbol].append(bar)
             
-            buffer = self._bar_buffers[symbol]
-            if len(buffer) < max(self.slow_period, self.trend_period):
+            # 数据不足
+            if len(self._bar_buffers[symbol]) < self.slow_period:
                 continue
             
-            # 提取数据
-            closes = buffer.get_array("close")
-            highs = buffer.get_array("high")
-            lows = buffer.get_array("low")
+            # 计算均线
+            closes = self._bar_buffers[symbol].get_array("close")
+            ma_fast = self.sma(closes, self.fast_period)[-1]
+            ma_slow = self.sma(closes, self.slow_period)[-1]
             
-            # 计算指标
-            ma_fast = self.ema(closes, self.fast_period)[-1]
-            ma_slow = self.ema(closes, self.slow_period)[-1]
-            ma_trend = self.ema(closes, self.trend_period)[-1]
-            atr_values = self.atr(highs, lows, closes, self.atr_period)
-            current_atr = atr_values[-1]
-            
-            if np.isnan(ma_fast) or np.isnan(ma_slow) or np.isnan(ma_trend) or np.isnan(current_atr):
+            if np.isnan(ma_fast) or np.isnan(ma_slow):
                 continue
             
-            # 市场状态检测
-            regime = self.detect_market_regime(closes, 30)
+            # 判断当前状态
+            current_state = "above" if ma_fast > ma_slow else "below"
+            last_state = self._last_ma_state.get(symbol)
             
             # 获取持仓
             position = self.get_position(symbol)
@@ -501,126 +420,31 @@ class DualMAStrategy(BaseStrategy):
                 else:
                     current_pos = -position.volume
             
-            # 更新trailing stop
-            if current_pos > 0:
-                if symbol not in self._trailing_highs or bar.high > self._trailing_highs[symbol]:
-                    self._trailing_highs[symbol] = bar.high
-                    # 移动止损
-                    new_stop = bar.high - current_atr * self.atr_stop_multiplier
-                    if symbol in self._stop_losses:
-                        self._stop_losses[symbol] = max(self._stop_losses[symbol], new_stop)
-            
-            elif current_pos < 0:
-                if symbol not in self._trailing_lows or bar.low < self._trailing_lows[symbol]:
-                    self._trailing_lows[symbol] = bar.low
-                    new_stop = bar.low + current_atr * self.atr_stop_multiplier
-                    if symbol in self._stop_losses:
-                        self._stop_losses[symbol] = min(self._stop_losses[symbol], new_stop)
-            
-            # 止损止盈检查
-            if current_pos > 0:
-                stop_loss = self._stop_losses.get(symbol, 0)
-                take_profit = self._take_profits.get(symbol, float('inf'))
-                
-                if bar.close <= stop_loss:
-                    self.sell(symbol, bar.close, current_pos)
-                    logger.info(f"{symbol} Stop Loss Hit: Sell @ {bar.close}, loss={bar.close - self._entry_prices.get(symbol, bar.close):.2f}")
-                    self._clear_trade_data(symbol)
-                    continue
-                elif bar.close >= take_profit:
-                    self.sell(symbol, bar.close, current_pos)
-                    logger.info(f"{symbol} Take Profit Hit: Sell @ {bar.close}, profit={bar.close - self._entry_prices.get(symbol, bar.close):.2f}")
-                    self._clear_trade_data(symbol)
-                    continue
-            
-            elif current_pos < 0:
-                stop_loss = self._stop_losses.get(symbol, float('inf'))
-                take_profit = self._take_profits.get(symbol, 0)
-                
-                if bar.close >= stop_loss:
+            # 信号判断
+            if last_state == "below" and current_state == "above":
+                # 金叉 - 平空开多
+                if current_pos < 0:
                     self.cover(symbol, bar.close, abs(current_pos))
-                    logger.info(f"{symbol} Stop Loss Hit: Cover @ {bar.close}")
-                    self._clear_trade_data(symbol)
-                    continue
-                elif bar.close <= take_profit:
-                    self.cover(symbol, bar.close, abs(current_pos))
-                    logger.info(f"{symbol} Take Profit Hit: Cover @ {bar.close}")
-                    self._clear_trade_data(symbol)
-                    continue
+                if current_pos <= 0:
+                    self.buy(symbol, bar.close, 1)
+                    logger.info(f"{symbol} Golden Cross: Buy @ {bar.close}")
             
-            # 判断当前状态
-            current_state = "above" if ma_fast > ma_slow else "below"
-            last_state = self._last_ma_state.get(symbol)
-            
-            # 趋势过滤器：价格必须在趋势线上方才做多，下方才做空
-            trend_filter_long = bar.close > ma_trend
-            trend_filter_short = bar.close < ma_trend
-            
-            # 只在非高波动市场交易
-            if regime == 'volatile':
-                self._last_ma_state[symbol] = current_state
-                continue
-            
-            # 信号判断 - 添加多重确认
-            if last_state == "below" and current_state == "above" and trend_filter_long:
-                # 额外确认：价格回调后突破
-                recent_high = np.max(highs[-5:])
-                if bar.close >= recent_high * 0.995:  # 突破近期高点
-                    # 金叉 - 平空开多
-                    if current_pos < 0:
-                        self.cover(symbol, bar.close, abs(current_pos))
-                        self._clear_trade_data(symbol)
-                    
-                    if current_pos <= 0:
-                        # 基于波动率调整仓位
-                        vol_percentile = self.calculate_volatility_percentile(closes, 60)
-                        size = 1 if vol_percentile < 0.8 else 1  # 高波动时可减仓
-                        
-                        self.buy(symbol, bar.close, size)
-                        self._entry_prices[symbol] = bar.close
-                        self._stop_losses[symbol] = bar.close - current_atr * self.atr_stop_multiplier
-                        self._take_profits[symbol] = bar.close + current_atr * self.atr_profit_multiplier
-                        self._trailing_highs[symbol] = bar.high
-                        logger.info(f"{symbol} Golden Cross [LONG]: Entry @ {bar.close}, Stop @ {self._stop_losses[symbol]:.2f}, Target @ {self._take_profits[symbol]:.2f}, Regime: {regime}")
-            
-            elif last_state == "above" and current_state == "below" and trend_filter_short:
-                # 额外确认：价格反弹后跌破
-                recent_low = np.min(lows[-5:])
-                if bar.close <= recent_low * 1.005:
-                    # 死叉 - 平多开空
-                    if current_pos > 0:
-                        self.sell(symbol, bar.close, current_pos)
-                        self._clear_trade_data(symbol)
-                    
-                    if current_pos >= 0 and regime != 'ranging':  # 震荡市不做空
-                        vol_percentile = self.calculate_volatility_percentile(closes, 60)
-                        size = 1 if vol_percentile < 0.8 else 1
-                        
-                        self.short(symbol, bar.close, size)
-                        self._entry_prices[symbol] = bar.close
-                        self._stop_losses[symbol] = bar.close + current_atr * self.atr_stop_multiplier
-                        self._take_profits[symbol] = bar.close - current_atr * self.atr_profit_multiplier
-                        self._trailing_lows[symbol] = bar.low
-                        logger.info(f"{symbol} Death Cross [SHORT]: Entry @ {bar.close}, Stop @ {self._stop_losses[symbol]:.2f}, Target @ {self._take_profits[symbol]:.2f}, Regime: {regime}")
+            elif last_state == "above" and current_state == "below":
+                # 死叉 - 平多开空
+                if current_pos > 0:
+                    self.sell(symbol, bar.close, current_pos)
+                if current_pos >= 0:
+                    self.short(symbol, bar.close, 1)
+                    logger.info(f"{symbol} Death Cross: Short @ {bar.close}")
             
             self._last_ma_state[symbol] = current_state
-    
-    def _clear_trade_data(self, symbol: str):
-        """清理交易数据"""
-        self._entry_prices.pop(symbol, None)
-        self._stop_losses.pop(symbol, None)
-        self._take_profits.pop(symbol, None)
-        self._trailing_highs.pop(symbol, None)
-        self._trailing_lows.pop(symbol, None)
 
 
 class TurtleStrategy(BaseStrategy):
     """
-    海龟交易法则 - 增强版
-    1. 动态ATR止损（根据波动率调整）
-    2. 金字塔加仓机制
-    3. 市场状态过滤
-    4. 风险调整后的仓位管理
+    海龟交易法则
+    突破N日高点做多，突破N日低点做空
+    使用ATR进行动态止损和仓位管理
     """
     
     strategy_name = "Turtle"
@@ -631,9 +455,6 @@ class TurtleStrategy(BaseStrategy):
         exit_period: int = 10,
         atr_period: int = 20,
         risk_percent: float = 0.01,
-        max_units: int = 4,
-        unit_add_atr: float = 0.5,
-        atr_stop_multiplier: float = 2.0,
         symbols: List[str] = None
     ):
         super().__init__()
@@ -641,30 +462,22 @@ class TurtleStrategy(BaseStrategy):
         self.exit_period = exit_period
         self.atr_period = atr_period
         self.risk_percent = risk_percent
-        self.max_units = max_units
-        self.unit_add_atr = unit_add_atr
-        self.atr_stop_multiplier = atr_stop_multiplier
         self.symbols = symbols or []
         
         self.parameters = {
             "entry_period": entry_period,
             "exit_period": exit_period,
             "atr_period": atr_period,
-            "risk_percent": risk_percent,
-            "max_units": max_units
+            "risk_percent": risk_percent
         }
         
-        # 交易记录
+        # 入场价格和ATR记录（用于止损）
         self._entry_prices: Dict[str, float] = {}
         self._entry_atr: Dict[str, float] = {}
-        self._units_held: Dict[str, int] = {}
-        self._last_add_price: Dict[str, float] = {}
-        self._stop_losses: Dict[str, float] = {}
-        self._last_breakout: Dict[str, str] = {}  # 记录最后突破方向
     
     def on_init(self):
         super().on_init()
-        buffer_size = max(self.entry_period, self.exit_period, self.atr_period) + 20
+        buffer_size = max(self.entry_period, self.exit_period, self.atr_period) + 10
         for symbol in self.symbols:
             self._bar_buffers[symbol] = DataBuffer(max_size=buffer_size)
     
@@ -675,7 +488,7 @@ class TurtleStrategy(BaseStrategy):
             
             # 更新K线缓冲
             if symbol not in self._bar_buffers:
-                buffer_size = max(self.entry_period, self.exit_period, self.atr_period) + 20
+                buffer_size = max(self.entry_period, self.exit_period, self.atr_period) + 10
                 self._bar_buffers[symbol] = DataBuffer(max_size=buffer_size)
             self._bar_buffers[symbol].append(bar)
             
@@ -688,7 +501,7 @@ class TurtleStrategy(BaseStrategy):
             lows = buffer.get_array("low")
             closes = buffer.get_array("close")
             
-            entry_high = np.max(highs[-self.entry_period:-1])
+            entry_high = np.max(highs[-self.entry_period:-1])  # 不包含当前K线
             entry_low = np.min(lows[-self.entry_period:-1])
             exit_high = np.max(highs[-self.exit_period:-1])
             exit_low = np.min(lows[-self.exit_period:-1])
@@ -697,14 +510,6 @@ class TurtleStrategy(BaseStrategy):
             current_atr = atr_values[-1]
             
             if np.isnan(current_atr):
-                continue
-            
-            # 市场状态检测
-            regime = self.detect_market_regime(closes, 30)
-            vol_percentile = self.calculate_volatility_percentile(closes, 60)
-            
-            # 高波动或震荡市场减少交易
-            if regime == 'volatile' or vol_percentile > 0.9:
                 continue
             
             # 获取持仓
@@ -716,135 +521,53 @@ class TurtleStrategy(BaseStrategy):
                 else:
                     current_pos = -position.volume
             
-            units_held = self._units_held.get(symbol, 0)
-            
-            # 动态调整ATR止损倍数（波动大时放宽）
-            dynamic_atr_mult = self.atr_stop_multiplier * (1 + vol_percentile * 0.5)
-            
-            # 计算仓位大小（基于风险和波动率调整）
+            # 计算仓位大小
             account = self.get_account()
             if account:
-                # 风险调整：高波动时减小仓位
-                risk_adj = 1.0 - vol_percentile * 0.5
                 unit_size = int(
-                    account.balance * self.risk_percent * risk_adj / 
-                    (current_atr * 10)
+                    account.balance * self.risk_percent / 
+                    (current_atr * 10)  # 假设合约乘数10
                 )
                 unit_size = max(1, unit_size)
             else:
                 unit_size = 1
             
-            # 止损检查
-            if current_pos > 0:
-                stop_loss = self._stop_losses.get(symbol, entry_low)
-                if bar.close < stop_loss:
-                    self.sell(symbol, bar.close, current_pos)
-                    logger.info(f"{symbol} Turtle: Stop loss exit long @ {bar.close}")
-                    self._clear_turtle_data(symbol)
-                    continue
-                # 更新移动止损
-                entry_price = self._entry_prices.get(symbol, bar.close)
-                entry_atr = self._entry_atr.get(symbol, current_atr)
-                new_stop = entry_price - dynamic_atr_mult * entry_atr
-                # 价格有利润时，提高止损线
-                if bar.close > entry_price:
-                    profit_atr = (bar.close - entry_price) / entry_atr
-                    if profit_atr >= 1:
-                        new_stop = entry_price  # 保本止损
-                    if profit_atr >= 2:
-                        new_stop = entry_price + entry_atr  # 锁定利润
-                self._stop_losses[symbol] = max(self._stop_losses.get(symbol, 0), new_stop)
-            
-            elif current_pos < 0:
-                stop_loss = self._stop_losses.get(symbol, entry_high)
-                if bar.close > stop_loss:
-                    self.cover(symbol, bar.close, abs(current_pos))
-                    logger.info(f"{symbol} Turtle: Stop loss exit short @ {bar.close}")
-                    self._clear_turtle_data(symbol)
-                    continue
-                entry_price = self._entry_prices.get(symbol, bar.close)
-                entry_atr = self._entry_atr.get(symbol, current_atr)
-                new_stop = entry_price + dynamic_atr_mult * entry_atr
-                if bar.close < entry_price:
-                    profit_atr = (entry_price - bar.close) / entry_atr
-                    if profit_atr >= 1:
-                        new_stop = entry_price
-                    if profit_atr >= 2:
-                        new_stop = entry_price - entry_atr
-                self._stop_losses[symbol] = min(self._stop_losses.get(symbol, float('inf')), new_stop)
-            
             # 入场信号
             if current_pos == 0:
-                if bar.close > entry_high and regime in ['trending_up', 'ranging']:
-                    # 避免连续假突破：检查是否刚刚止损
-                    last_breakout = self._last_breakout.get(symbol)
-                    if last_breakout != 'long_failed':
-                        self.buy(symbol, bar.close, unit_size)
-                        self._entry_prices[symbol] = bar.close
-                        self._entry_atr[symbol] = current_atr
-                        self._units_held[symbol] = 1
-                        self._last_add_price[symbol] = bar.close
-                        self._stop_losses[symbol] = bar.close - dynamic_atr_mult * current_atr
-                        self._last_breakout[symbol] = 'long'
-                        logger.info(f"{symbol} Turtle: Long breakout @ {bar.close}, ATR={current_atr:.2f}, Stop={self._stop_losses[symbol]:.2f}, Regime={regime}")
-                
-                elif bar.close < entry_low and regime in ['trending_down']:
-                    last_breakout = self._last_breakout.get(symbol)
-                    if last_breakout != 'short_failed':
-                        self.short(symbol, bar.close, unit_size)
-                        self._entry_prices[symbol] = bar.close
-                        self._entry_atr[symbol] = current_atr
-                        self._units_held[symbol] = 1
-                        self._last_add_price[symbol] = bar.close
-                        self._stop_losses[symbol] = bar.close + dynamic_atr_mult * current_atr
-                        self._last_breakout[symbol] = 'short'
-                        logger.info(f"{symbol} Turtle: Short breakout @ {bar.close}, ATR={current_atr:.2f}, Stop={self._stop_losses[symbol]:.2f}, Regime={regime}")
-            
-            # 金字塔加仓
-            elif current_pos > 0 and units_held < self.max_units:
-                last_add_price = self._last_add_price.get(symbol, bar.close)
-                entry_atr = self._entry_atr.get(symbol, current_atr)
-                if bar.close >= last_add_price + self.unit_add_atr * entry_atr:
-                    # 加仓
+                if bar.close > entry_high:
+                    # 突破高点做多
                     self.buy(symbol, bar.close, unit_size)
-                    self._units_held[symbol] = units_held + 1
-                    self._last_add_price[symbol] = bar.close
-                    logger.info(f"{symbol} Turtle: Add long unit {units_held + 1} @ {bar.close}")
-            
-            elif current_pos < 0 and units_held < self.max_units:
-                last_add_price = self._last_add_price.get(symbol, bar.close)
-                entry_atr = self._entry_atr.get(symbol, current_atr)
-                if bar.close <= last_add_price - self.unit_add_atr * entry_atr:
+                    self._entry_prices[symbol] = bar.close
+                    self._entry_atr[symbol] = current_atr
+                    logger.info(f"{symbol} Turtle: Long breakout @ {bar.close}")
+                
+                elif bar.close < entry_low:
+                    # 突破低点做空
                     self.short(symbol, bar.close, unit_size)
-                    self._units_held[symbol] = units_held + 1
-                    self._last_add_price[symbol] = bar.close
-                    logger.info(f"{symbol} Turtle: Add short unit {units_held + 1} @ {bar.close}")
+                    self._entry_prices[symbol] = bar.close
+                    self._entry_atr[symbol] = current_atr
+                    logger.info(f"{symbol} Turtle: Short breakout @ {bar.close}")
             
-            # 出场信号（突破退出通道）
-            if current_pos > 0 and bar.close < exit_low:
-                self.sell(symbol, bar.close, current_pos)
-                logger.info(f"{symbol} Turtle: Exit long @ {bar.close}")
-                # 记录可能是假突破
+            # 出场信号
+            elif current_pos > 0:
                 entry_price = self._entry_prices.get(symbol, bar.close)
-                if bar.close < entry_price:
-                    self._last_breakout[symbol] = 'long_failed'
-                self._clear_turtle_data(symbol)
+                entry_atr = self._entry_atr.get(symbol, current_atr)
+                
+                # ATR止损或突破低点出场
+                stop_loss = entry_price - 2 * entry_atr
+                if bar.close < exit_low or bar.close < stop_loss:
+                    self.sell(symbol, bar.close, current_pos)
+                    logger.info(f"{symbol} Turtle: Exit long @ {bar.close}")
             
-            elif current_pos < 0 and bar.close > exit_high:
-                self.cover(symbol, bar.close, abs(current_pos))
-                logger.info(f"{symbol} Turtle: Exit short @ {bar.close}")
+            elif current_pos < 0:
                 entry_price = self._entry_prices.get(symbol, bar.close)
-                if bar.close > entry_price:
-                    self._last_breakout[symbol] = 'short_failed'
-                self._clear_turtle_data(symbol)
-    
-    def _clear_turtle_data(self, symbol: str):
-        """清理交易数据"""
-        self._entry_prices.pop(symbol, None)
-        self._entry_atr.pop(symbol, None)
-        self._units_held.pop(symbol, None)
-        self._last_add_price.pop(symbol, None)
-        self._stop_losses.pop(symbol, None)
+                entry_atr = self._entry_atr.get(symbol, current_atr)
+                
+                # ATR止损或突破高点出场
+                stop_loss = entry_price + 2 * entry_atr
+                if bar.close > exit_high or bar.close > stop_loss:
+                    self.cover(symbol, bar.close, abs(current_pos))
+                    logger.info(f"{symbol} Turtle: Exit short @ {bar.close}")
 
 
 class GridStrategy(BaseStrategy):
@@ -938,11 +661,8 @@ class GridStrategy(BaseStrategy):
 
 class MeanReversionStrategy(BaseStrategy):
     """
-    均值回归策略 - 增强版
-    1. 添加趋势过滤器（仅在震荡市使用）
-    2. 多时间框架确认
-    3. 动态止损止盈
-    4. 波动率自适应
+    均值回归策略
+    价格偏离均值过大时反向交易
     """
     
     strategy_name = "MeanReversion"
@@ -951,31 +671,20 @@ class MeanReversionStrategy(BaseStrategy):
         self,
         lookback_period: int = 20,
         entry_std: float = 2.0,
-        exit_std: float = 0.3,
-        trend_period: int = 60,
-        max_hold_bars: int = 10,
-        atr_stop_multiplier: float = 3.0,
+        exit_std: float = 0.5,
         symbols: List[str] = None
     ):
         super().__init__()
         self.lookback_period = lookback_period
         self.entry_std = entry_std
         self.exit_std = exit_std
-        self.trend_period = trend_period
-        self.max_hold_bars = max_hold_bars
-        self.atr_stop_multiplier = atr_stop_multiplier
         self.symbols = symbols or []
         
         self.parameters = {
             "lookback_period": lookback_period,
             "entry_std": entry_std,
-            "exit_std": exit_std,
-            "trend_period": trend_period
+            "exit_std": exit_std
         }
-        
-        self._entry_bars: Dict[str, int] = {}
-        self._entry_prices: Dict[str, float] = {}
-        self._stop_losses: Dict[str, float] = {}
     
     def on_bar(self, bars: Dict[str, BarData]):
         for symbol, bar in bars.items():
@@ -984,33 +693,15 @@ class MeanReversionStrategy(BaseStrategy):
             
             # 更新K线缓冲
             if symbol not in self._bar_buffers:
-                self._bar_buffers[symbol] = DataBuffer(max_size=max(self.lookback_period, self.trend_period) * 2)
+                self._bar_buffers[symbol] = DataBuffer(max_size=self.lookback_period * 2)
             self._bar_buffers[symbol].append(bar)
             
             buffer = self._bar_buffers[symbol]
-            if len(buffer) < max(self.lookback_period, self.trend_period):
+            if len(buffer) < self.lookback_period:
                 continue
             
-            # 获取数据
+            # 计算z-score
             closes = buffer.get_array("close")
-            highs = buffer.get_array("high")
-            lows = buffer.get_array("low")
-            
-            # 市场状态检测 - 仅在震荡市交易
-            regime = self.detect_market_regime(closes, 30)
-            if regime not in ['ranging', 'volatile']:
-                # 趋势市场不适合均值回归，平仓退出
-                position = self.get_position(symbol)
-                if position and position.volume > 0:
-                    if position.direction == Direction.LONG:
-                        self.sell(symbol, bar.close, position.volume)
-                    else:
-                        self.cover(symbol, bar.close, position.volume)
-                    logger.info(f"{symbol} Mean Reversion: Exit due to trend market")
-                    self._clear_entry_data(symbol)
-                continue
-            
-            # 计算统计量
             mean = np.mean(closes[-self.lookback_period:])
             std = np.std(closes[-self.lookback_period:])
             
@@ -1018,13 +709,6 @@ class MeanReversionStrategy(BaseStrategy):
                 continue
             
             z_score = (bar.close - mean) / std
-            
-            # 计算ATR用于止损
-            atr_values = self.atr(highs, lows, closes, 14)
-            current_atr = atr_values[-1]
-            
-            if np.isnan(current_atr):
-                continue
             
             # 获取持仓
             position = self.get_position(symbol)
@@ -1035,88 +719,29 @@ class MeanReversionStrategy(BaseStrategy):
                 else:
                     current_pos = -position.volume
             
-            # 更新持仓时间
-            if current_pos != 0:
-                self._entry_bars[symbol] = self._entry_bars.get(symbol, 0) + 1
-            
-            # 时间止损：持仓过久强制平仓
-            if self._entry_bars.get(symbol, 0) >= self.max_hold_bars:
-                if current_pos > 0:
-                    self.sell(symbol, bar.close, current_pos)
-                    logger.info(f"{symbol} Mean Reversion: Time stop @ {bar.close}")
-                elif current_pos < 0:
-                    self.cover(symbol, bar.close, abs(current_pos))
-                    logger.info(f"{symbol} Mean Reversion: Time stop @ {bar.close}")
-                self._clear_entry_data(symbol)
-                continue
-            
-            # ATR止损检查
-            if current_pos > 0:
-                stop_loss = self._stop_losses.get(symbol, 0)
-                if bar.close <= stop_loss:
-                    self.sell(symbol, bar.close, current_pos)
-                    logger.info(f"{symbol} Mean Reversion: Stop loss @ {bar.close}")
-                    self._clear_entry_data(symbol)
-                    continue
-            elif current_pos < 0:
-                stop_loss = self._stop_losses.get(symbol, float('inf'))
-                if bar.close >= stop_loss:
-                    self.cover(symbol, bar.close, abs(current_pos))
-                    logger.info(f"{symbol} Mean Reversion: Stop loss @ {bar.close}")
-                    self._clear_entry_data(symbol)
-                    continue
-            
             # 交易逻辑
             if current_pos == 0:
-                # 动态调整入场阈值（高波动时提高阈值）
-                vol_percentile = self.calculate_volatility_percentile(closes, 60)
-                dynamic_entry_std = self.entry_std * (1 + vol_percentile * 0.5)
+                if z_score > self.entry_std:
+                    # 价格过高，做空
+                    self.short(symbol, bar.close, 1)
+                    logger.info(f"{symbol} Mean Reversion: Short @ {bar.close}, z={z_score:.2f}")
                 
-                if z_score > dynamic_entry_std:
-                    # 价格过高，做空 - 额外确认：RSI也超买
-                    rsi = self.rsi(closes, 14)[-1]
-                    if not np.isnan(rsi) and rsi > 70:
-                        self.short(symbol, bar.close, 1)
-                        self._entry_prices[symbol] = bar.close
-                        self._entry_bars[symbol] = 0
-                        self._stop_losses[symbol] = bar.close + current_atr * self.atr_stop_multiplier
-                        logger.info(f"{symbol} Mean Reversion [SHORT]: @ {bar.close}, z={z_score:.2f}, RSI={rsi:.1f}, Regime={regime}")
-                
-                elif z_score < -dynamic_entry_std:
-                    # 价格过低，做多 - 额外确认：RSI也超卖
-                    rsi = self.rsi(closes, 14)[-1]
-                    if not np.isnan(rsi) and rsi < 30:
-                        self.buy(symbol, bar.close, 1)
-                        self._entry_prices[symbol] = bar.close
-                        self._entry_bars[symbol] = 0
-                        self._stop_losses[symbol] = bar.close - current_atr * self.atr_stop_multiplier
-                        logger.info(f"{symbol} Mean Reversion [LONG]: @ {bar.close}, z={z_score:.2f}, RSI={rsi:.1f}, Regime={regime}")
+                elif z_score < -self.entry_std:
+                    # 价格过低，做多
+                    self.buy(symbol, bar.close, 1)
+                    logger.info(f"{symbol} Mean Reversion: Long @ {bar.close}, z={z_score:.2f}")
             
             elif current_pos > 0:
-                # 持多仓，回归均值或盈利足够时平仓
-                entry_price = self._entry_prices.get(symbol, bar.close)
-                profit_pct = (bar.close - entry_price) / entry_price
-                
-                if z_score > -self.exit_std or profit_pct > 0.02:  # 回归均值或2%利润
+                # 持多仓，回归均值时平仓
+                if z_score > -self.exit_std:
                     self.sell(symbol, bar.close, current_pos)
-                    logger.info(f"{symbol} Mean Reversion: Close long @ {bar.close}, z={z_score:.2f}, profit={profit_pct:.2%}")
-                    self._clear_entry_data(symbol)
+                    logger.info(f"{symbol} Mean Reversion: Close long @ {bar.close}, z={z_score:.2f}")
             
             elif current_pos < 0:
-                # 持空仓，回归均值或盈利足够时平仓
-                entry_price = self._entry_prices.get(symbol, bar.close)
-                profit_pct = (entry_price - bar.close) / entry_price
-                
-                if z_score < self.exit_std or profit_pct > 0.02:
+                # 持空仓，回归均值时平仓
+                if z_score < self.exit_std:
                     self.cover(symbol, bar.close, abs(current_pos))
-                    logger.info(f"{symbol} Mean Reversion: Close short @ {bar.close}, z={z_score:.2f}, profit={profit_pct:.2%}")
-                    self._clear_entry_data(symbol)
-    
-    def _clear_entry_data(self, symbol: str):
-        """清理入场数据"""
-        self._entry_bars.pop(symbol, None)
-        self._entry_prices.pop(symbol, None)
-        self._stop_losses.pop(symbol, None)
+                    logger.info(f"{symbol} Mean Reversion: Close short @ {bar.close}, z={z_score:.2f}")
 
 
 class MomentumStrategy(BaseStrategy):

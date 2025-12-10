@@ -14,7 +14,10 @@ import logging
 import time
 from abc import ABC, abstractmethod
 
-from ..data.data_structures import (
+import sys
+sys.path.append('..')
+
+from data.data_structures import (
     OrderData, TradeData, PositionData, AccountData,
     OrderStatus, Direction, OrderType
 )
