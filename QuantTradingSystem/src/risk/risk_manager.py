@@ -63,39 +63,60 @@ class RiskCheckResult:
 
 @dataclass
 class RiskManagerConfig:
-    """风控配置"""
-    # 单笔风险
-    max_loss_per_trade: float = 0.02       # 单笔最大亏损比例
-    max_order_value: float = 0.10          # 单笔最大委托金额比例
+    """风控配置 - 针对全自动交易优化"""
+    # 单笔风险 - 更严格的控制
+    max_loss_per_trade: float = 0.01       # 单笔最大亏损比例（从2%降至1%）
+    max_order_value: float = 0.08          # 单笔最大委托金额比例（从10%降至8%）
     
-    # 日内风险
-    max_daily_loss: float = 0.05           # 日内最大亏损比例
-    max_daily_trades: int = 50             # 日内最大交易次数
-    max_daily_turnover: float = 5.0        # 日内最大换手率
+    # 日内风险 - 更保守的限制
+    max_daily_loss: float = 0.03           # 日内最大亏损比例（从5%降至3%）
+    max_daily_trades: int = 30             # 日内最大交易次数（从50降至30，减少过度交易）
+    max_daily_turnover: float = 3.0        # 日内最大换手率（从5降至3）
     
-    # 仓位风险
-    max_position_per_symbol: float = 0.15  # 单品种最大仓位比例
-    max_total_position: float = 0.80       # 总仓位上限
-    max_correlated_exposure: float = 0.30  # 相关品种最大敞口
+    # 仓位风险 - 分散化
+    max_position_per_symbol: float = 0.10  # 单品种最大仓位比例（从15%降至10%）
+    max_total_position: float = 0.60       # 总仓位上限（从80%降至60%）
+    max_correlated_exposure: float = 0.20  # 相关品种最大敞口（从30%降至20%）
     
-    # 杠杆风险
-    max_leverage: float = 3.0              # 最大杠杆倍数
+    # 杠杆风险 - 更保守
+    max_leverage: float = 2.0              # 最大杠杆倍数（从3降至2）
     
     # 流动性风险
-    min_volume_threshold: int = 2000       # 最小成交量阈值
-    max_volume_participation: float = 0.05 # 最大成交量占比
+    min_volume_threshold: int = 3000       # 最小成交量阈值（从2000增至3000）
+    max_volume_participation: float = 0.03 # 最大成交量占比（从5%降至3%）
     
-    # 回撤风险
-    max_drawdown: float = 0.10             # 最大回撤阈值
-    drawdown_reduce_ratio: float = 0.5     # 回撤达阈值时减仓比例
+    # 回撤风险 - 动态管理
+    max_drawdown: float = 0.08             # 最大回撤阈值（从10%降至8%）
+    drawdown_reduce_ratio: float = 0.6     # 回撤达阈值时减仓比例（从50%增至60%）
+    drawdown_warning_level: float = 0.05   # 回撤预警阈值（新增，5%开始减仓）
     
-    # 波动风险
+    # 波动风险 - 更敏感
     volatility_scaling: bool = True        # 是否启用波动率缩放
-    max_volatility_multiple: float = 2.0   # 最大波动率倍数
+    max_volatility_multiple: float = 1.5   # 最大波动率倍数（从2降至1.5）
+    min_volatility_multiple: float = 0.5   # 最小波动率倍数（新增，防止过度放大仓位）
     
-    # 熔断配置
+    # 熔断配置 - 更严格
     circuit_breaker_enabled: bool = True
-    circuit_breaker_threshold: float = 0.07  # 触发熔断的亏损比例
+    circuit_breaker_threshold: float = 0.05  # 触发熔断的亏损比例（从7%降至5%）
+    circuit_breaker_cooldown_hours: int = 4  # 熔断冷却时间（新增）
+    
+    # 动态止损止盈配置（新增）
+    atr_stop_loss_multiple: float = 2.0    # ATR止损倍数
+    atr_take_profit_multiple: float = 3.0  # ATR止盈倍数
+    trailing_stop_enabled: bool = True     # 启用移动止损
+    trailing_stop_atr_multiple: float = 1.5  # 移动止损ATR倍数
+    
+    # 盈利保护（新增）
+    profit_lock_threshold: float = 0.02    # 盈利锁定阈值（浮盈超过2%时开始保护）
+    profit_lock_ratio: float = 0.50        # 至少锁定50%的浮盈
+    
+    # 连续亏损控制（新增）
+    max_consecutive_losses: int = 3        # 最大连续亏损次数
+    loss_streak_reduce_ratio: float = 0.5  # 连续亏损时仓位缩减比例
+    
+    # 时间风险（新增）
+    max_holding_bars: int = 100            # 最大持仓K线数（防止长期套牢）
+    overnight_position_limit: float = 0.30 # 隔夜仓位限制
 
 
 # ==================== 仓位管理器 ====================
@@ -104,11 +125,14 @@ class PositionSizer:
     """
     仓位管理器
     基于Kelly公式和风险预算动态计算仓位
+    增强版：包含波动率调整、连续亏损惩罚、趋势强度加权
     """
     
     def __init__(self, config: RiskManagerConfig):
         self.config = config
         self._strategy_stats: Dict[str, Dict] = {}
+        self._consecutive_losses: Dict[str, int] = {}  # 连续亏损追踪
+        self._recent_trades: Dict[str, List[float]] = {}  # 近期交易收益
     
     def update_strategy_stats(
         self, 
@@ -123,46 +147,101 @@ class PositionSizer:
             "win_rate": win_rate,
             "profit_factor": profit_factor,
             "avg_win": avg_win,
-            "avg_loss": avg_loss
+            "avg_loss": avg_loss,
+            "updated_at": datetime.now()
         }
+    
+    def record_trade_result(self, strategy_name: str, pnl: float):
+        """记录交易结果，用于动态调整"""
+        if strategy_name not in self._recent_trades:
+            self._recent_trades[strategy_name] = []
+        
+        self._recent_trades[strategy_name].append(pnl)
+        # 只保留最近50笔交易
+        if len(self._recent_trades[strategy_name]) > 50:
+            self._recent_trades[strategy_name] = self._recent_trades[strategy_name][-50:]
+        
+        # 更新连续亏损计数
+        if pnl < 0:
+            self._consecutive_losses[strategy_name] = \
+                self._consecutive_losses.get(strategy_name, 0) + 1
+        else:
+            self._consecutive_losses[strategy_name] = 0
+    
+    def get_loss_streak_factor(self, strategy_name: str) -> float:
+        """获取连续亏损调整因子"""
+        losses = self._consecutive_losses.get(strategy_name, 0)
+        if losses >= self.config.max_consecutive_losses:
+            # 达到最大连续亏损，大幅减仓
+            return self.config.loss_streak_reduce_ratio
+        elif losses > 0:
+            # 有连续亏损，逐步减仓
+            return 1.0 - (losses * 0.15)  # 每次亏损减少15%
+        return 1.0
     
     def calculate_kelly_fraction(self, strategy_name: str) -> float:
         """
         计算Kelly最优仓位比例
+        改进版：使用分数Kelly和动态调整
         
         Kelly公式: f* = (p * b - q) / b
         其中: p=胜率, q=败率, b=盈亏比
         """
         stats = self._strategy_stats.get(strategy_name)
         if not stats:
-            return 0.02  # 默认2%仓位
+            return 0.01  # 默认1%仓位（更保守）
         
         p = stats["win_rate"]
         q = 1 - p
         b = stats["profit_factor"]
         
-        if b <= 0:
-            return 0
+        if b <= 0 or p <= 0:
+            return 0.01
         
         kelly = (p * b - q) / b
         
-        # 使用半Kelly（更保守）
-        kelly = kelly * 0.5
+        # 使用1/3 Kelly（更保守的分数Kelly）
+        kelly = kelly / 3
         
-        # 限制范围
-        kelly = max(0.01, min(kelly, 0.25))
+        # 考虑连续亏损惩罚
+        kelly *= self.get_loss_streak_factor(strategy_name)
+        
+        # 考虑近期表现
+        recent_factor = self._calculate_recent_performance_factor(strategy_name)
+        kelly *= recent_factor
+        
+        # 限制范围：最小0.5%，最大15%
+        kelly = max(0.005, min(kelly, 0.15))
         
         return kelly
+    
+    def _calculate_recent_performance_factor(self, strategy_name: str) -> float:
+        """计算近期表现调整因子"""
+        recent_trades = self._recent_trades.get(strategy_name, [])
+        if len(recent_trades) < 10:
+            return 1.0
+        
+        # 计算近10笔交易的胜率
+        recent_10 = recent_trades[-10:]
+        recent_wins = sum(1 for t in recent_10 if t > 0)
+        recent_win_rate = recent_wins / len(recent_10)
+        
+        # 根据近期表现调整
+        if recent_win_rate >= 0.6:
+            return 1.1  # 近期表现好，略微增加
+        elif recent_win_rate <= 0.3:
+            return 0.7  # 近期表现差，减仓
+        return 1.0
     
     def calculate_volatility_adjusted_size(
         self,
         base_size: int,
         current_volatility: float,
-        target_volatility: float = 0.02
+        target_volatility: float = 0.015  # 更保守的目标波动率
     ) -> int:
         """
         根据波动率调整仓位
-        高波动时减仓，低波动时可适当加仓
+        高波动时减仓，低波动时可适当加仓（有上限）
         """
         if not self.config.volatility_scaling:
             return base_size
@@ -173,8 +252,11 @@ class PositionSizer:
         # 波动率调整因子
         vol_factor = target_volatility / current_volatility
         
-        # 限制调整幅度
-        vol_factor = max(0.5, min(vol_factor, self.config.max_volatility_multiple))
+        # 限制调整幅度（更严格的范围）
+        vol_factor = max(
+            self.config.min_volatility_multiple, 
+            min(vol_factor, self.config.max_volatility_multiple)
+        )
         
         adjusted_size = int(base_size * vol_factor)
         return max(1, adjusted_size)
@@ -187,7 +269,9 @@ class PositionSizer:
         contract_size: float,
         margin_ratio: float,
         strategy_name: str = "",
-        current_volatility: float = 0
+        current_volatility: float = 0,
+        atr: float = 0,
+        trend_strength: float = 0.5  # 趋势强度 0-1
     ) -> int:
         """
         计算最优仓位
@@ -196,8 +280,55 @@ class PositionSizer:
         - Kelly公式
         - 风险预算
         - 波动率调整
+        - 连续亏损惩罚
+        - 趋势强度加权
         - 最大仓位限制
         """
+        available = account.available
+        
+        # 1. 基于风险预算计算（使用ATR更精确）
+        if atr > 0:
+            per_unit_risk = atr * contract_size * self.config.atr_stop_loss_multiple
+        else:
+            per_unit_risk = price * contract_size * 0.02
+        
+        risk_budget = available * self.config.max_loss_per_trade
+        if per_unit_risk > 0:
+            risk_based_size = int(risk_budget / per_unit_risk)
+        else:
+            risk_based_size = 1
+        
+        # 2. 基于Kelly公式计算
+        kelly_fraction = self.calculate_kelly_fraction(strategy_name)
+        kelly_capital = available * kelly_fraction
+        kelly_based_size = int(kelly_capital / (price * contract_size * margin_ratio))
+        
+        # 3. 取较小值（更保守）
+        base_size = min(risk_based_size, kelly_based_size)
+        
+        # 4. 波动率调整
+        if current_volatility > 0:
+            base_size = self.calculate_volatility_adjusted_size(
+                base_size, current_volatility
+            )
+        
+        # 5. 趋势强度调整（趋势弱时减仓）
+        if trend_strength < 0.3:
+            base_size = int(base_size * 0.5)  # 弱趋势减半
+        elif trend_strength < 0.5:
+            base_size = int(base_size * 0.7)  # 中等趋势减30%
+        
+        # 6. 连续亏损惩罚
+        loss_factor = self.get_loss_streak_factor(strategy_name)
+        base_size = int(base_size * loss_factor)
+        
+        # 7. 最大仓位限制
+        max_position_value = available * self.config.max_position_per_symbol
+        max_size = int(max_position_value / (price * contract_size * margin_ratio))
+        
+        final_size = min(base_size, max_size)
+        
+        return max(1, final_size)
         available = account.available
         
         # 1. 基于风险预算计算
