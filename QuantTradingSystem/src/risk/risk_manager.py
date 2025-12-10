@@ -143,31 +143,46 @@ class PositionSizer:
     
     def calculate_kelly_fraction(self, strategy_name: str) -> float:
         """
-        计算Kelly最优仓位比例
+        计算Kelly最优仓位比例 - 改进版
         
         Kelly公式: f* = (p * b - q) / b
-        其中: p=胜率, q=败率, b=盈亏比
+        考虑估计误差，使用更保守的分数Kelly
         """
         stats = self._strategy_stats.get(strategy_name)
-        if not stats:
-            return 0.02  # 默认2%仓位
+        if not stats or stats["win_rate"] == 0:
+            return 0.01  # 默认1%仓位（更保守）
         
         p = stats["win_rate"]
         q = 1 - p
-        b = stats["profit_factor"]
         
-        if b <= 0:
-            return 0
+        # 使用盈亏比而非profit_factor
+        if stats["avg_loss"] == 0:
+            return 0.01
         
+        b = abs(stats["avg_win"] / stats["avg_loss"])
+        
+        if b <= 0 or p <= 0:
+            return 0.01
+        
+        # Kelly公式
         kelly = (p * b - q) / b
         
-        # 使用半Kelly（更保守）
-        kelly = kelly * 0.5
+        # 考虑估计误差：样本量越小，越保守
+        # 假设至少需要30个样本才能合理估计
+        sample_adj = min(1.0, self.trade_count.get(strategy_name, 10) / 30.0)
         
-        # 限制范围
-        kelly = max(0.01, min(kelly, 0.25))
+        # 使用1/4 Kelly（更保守，减少方差）
+        kelly = kelly * 0.25 * sample_adj
+        
+        # 严格限制范围
+        kelly = max(0.005, min(kelly, 0.15))
         
         return kelly
+    
+    @property
+    def trade_count(self) -> Dict[str, int]:
+        """获取各策略交易次数"""
+        return getattr(self, '_trade_counts', {})
     
     def calculate_volatility_adjusted_size(
         self,
