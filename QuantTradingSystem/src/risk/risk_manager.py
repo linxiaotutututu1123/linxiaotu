@@ -578,6 +578,111 @@ class RiskManager:
         if sector_exposure > 0:
             result.add_message(f"注意: {order_sector}板块敞口较大")
     
+    def _check_consecutive_losses(self, result: RiskCheckResult) -> bool:
+        """检查连续亏损"""
+        if self._consecutive_losses >= self.config.max_consecutive_losses:
+            result.fail(
+                RiskAction.WARN,
+                RiskLevel.HIGH,
+                f"连续亏损{self._consecutive_losses}次，建议暂停交易或减小仓位"
+            )
+            result.suggested_volume = 0  # 建议停止交易
+            self._log_risk_event("CONSECUTIVE_LOSSES", {
+                "count": self._consecutive_losses
+            })
+            return True
+        elif self._consecutive_losses >= self.config.max_consecutive_losses * 0.75:
+            result.add_message(f"警告: 已连续亏损{self._consecutive_losses}次")
+        return False
+    
+    def _check_profit_protection(self, account: AccountData, result: RiskCheckResult):
+        """盈利保护检查"""
+        if self._peak_balance == 0:
+            return
+        
+        total_return = (account.balance - self._peak_balance) / self._peak_balance
+        
+        # 如果有足够盈利，启用保护
+        if total_return >= self.config.profit_protection_threshold:
+            # 计算受保护的利润
+            profit = account.balance - self._peak_balance
+            self._protected_profit = profit * self.config.profit_protection_ratio
+            
+            # 当前回撤如果侵蚀受保护利润，发出警告
+            current_profit = account.balance - self._peak_balance
+            if current_profit < self._protected_profit:
+                result.add_message(
+                    f"盈利保护警告: 当前盈利{current_profit:.2f}低于保护线{self._protected_profit:.2f}"
+                )
+                result.action = RiskAction.WARN
+                result.level = RiskLevel.MEDIUM
+    
+    def _check_correlation_risk_enhanced(
+        self,
+        order: OrderData,
+        account: AccountData,
+        positions: Dict[str, PositionData],
+        result: RiskCheckResult
+    ):
+        """增强的相关性风险检查"""
+        if order.offset != Offset.OPEN:
+            return
+        
+        # 定义板块及相关性
+        sectors = {
+            "黑色系": ["rb", "hc", "i", "j", "jm"],
+            "有色金属": ["cu", "al", "zn", "pb", "ni"],
+            "能源化工": ["sc", "bu", "fu", "ta", "ma", "eg"],
+            "农产品": ["c", "cs", "a", "m", "y", "p"],
+            "贵金属": ["au", "ag"],
+        }
+        
+        # 获取订单品种所属板块
+        symbol_lower = order.symbol.lower()
+        order_sector = None
+        for sector, symbols in sectors.items():
+            if any(s in symbol_lower for s in symbols):
+                order_sector = sector
+                break
+        
+        if not order_sector:
+            return
+        
+        # 计算同板块持仓价值
+        contract_size = 10
+        margin_ratio = 0.1
+        sector_exposure = 0
+        sector_count = 0
+        
+        for pos_symbol, pos in positions.items():
+            for s in sectors.get(order_sector, []):
+                if s in pos_symbol.lower():
+                    sector_exposure += pos.volume * pos.price * contract_size * margin_ratio
+                    sector_count += 1
+        
+        # 添加新订单
+        new_exposure = order.price * order.volume * contract_size * margin_ratio
+        total_sector_exposure = sector_exposure + new_exposure
+        
+        # 检查板块集中度
+        sector_ratio = total_sector_exposure / account.balance if account.balance > 0 else 0
+        
+        if sector_ratio > self.config.max_correlated_exposure:
+            result.fail(
+                RiskAction.REJECT,
+                RiskLevel.HIGH,
+                f"{order_sector}板块集中度过高: {sector_ratio:.2%} > {self.config.max_correlated_exposure:.2%}"
+            )
+            self._log_risk_event("SECTOR_CONCENTRATION", {
+                "sector": order_sector,
+                "ratio": sector_ratio,
+                "threshold": self.config.max_correlated_exposure
+            })
+        elif sector_ratio > self.config.max_correlated_exposure * 0.8:
+            result.add_message(f"警告: {order_sector}板块集中度{sector_ratio:.2%}接近上限")
+            result.action = RiskAction.WARN
+            result.level = RiskLevel.MEDIUM
+    
     def update_daily_stats(self, trade_pnl: float, turnover: float, current_date: datetime):
         """更新日内统计"""
         # 日期变化时重置
