@@ -283,6 +283,11 @@ class RiskManager:
         # 回撤追踪
         self._peak_balance: float = 0
         self._current_drawdown: float = 0
+        self._protected_profit: float = 0  # 受保护的利润
+        
+        # 连续亏损追踪
+        self._consecutive_losses: int = 0
+        self._last_trade_profit: float = 0
         
         # 品种相关性矩阵
         self._correlation_matrix: Dict[str, Dict[str, float]] = {}
@@ -293,6 +298,12 @@ class RiskManager:
         
         # 风险事件日志
         self._risk_events: List[Dict] = []
+        
+        # 仓位快照（用于计算相关性风险）
+        self._position_snapshot: Dict[str, float] = {}
+        
+        # 交易统计（用于Kelly公式）
+        self._trade_counts: Dict[str, int] = {}
     
     def check_order(
         self,
