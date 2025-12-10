@@ -691,10 +691,19 @@ class RiskManager:
             self._daily_pnl = 0
             self._daily_turnover = 0
             self._daily_date = current_date
+            self._consecutive_losses = 0  # 每日重置连续亏损
         
         self._daily_trades += 1
         self._daily_pnl += trade_pnl
         self._daily_turnover += turnover
+        
+        # 更新连续亏损
+        if trade_pnl < 0:
+            self._consecutive_losses += 1
+        else:
+            self._consecutive_losses = 0
+        
+        self._last_trade_profit = trade_pnl
     
     def check_drawdown(self, current_balance: float) -> RiskCheckResult:
         """
