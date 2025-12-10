@@ -412,35 +412,53 @@ class BaseStrategy(ABC):
 
 class DualMAStrategy(BaseStrategy):
     """
-    双均线策略
-    金叉做多，死叉做空
+    双均线策略 - 增强版
+    1. 添加趋势过滤器避免震荡市场
+    2. 使用多重确认减少假信号
+    3. 动态止损止盈
+    4. 仓位管理基于波动率
     """
     
     strategy_name = "DualMA"
     
     def __init__(
         self,
-        fast_period: int = 5,
-        slow_period: int = 20,
+        fast_period: int = 8,
+        slow_period: int = 21,
+        trend_period: int = 60,
+        atr_period: int = 14,
+        atr_stop_multiplier: float = 2.5,
+        atr_profit_multiplier: float = 4.0,
         symbols: List[str] = None
     ):
         super().__init__()
         self.fast_period = fast_period
         self.slow_period = slow_period
+        self.trend_period = trend_period
+        self.atr_period = atr_period
+        self.atr_stop_multiplier = atr_stop_multiplier
+        self.atr_profit_multiplier = atr_profit_multiplier
         self.symbols = symbols or []
         
         self.parameters = {
             "fast_period": fast_period,
-            "slow_period": slow_period
+            "slow_period": slow_period,
+            "trend_period": trend_period,
+            "atr_stop_multiplier": atr_stop_multiplier
         }
         
-        # 存储上一次的均线状态
-        self._last_ma_state: Dict[str, str] = {}  # symbol -> "above" / "below"
+        # 存储交易信息
+        self._last_ma_state: Dict[str, str] = {}
+        self._entry_prices: Dict[str, float] = {}
+        self._stop_losses: Dict[str, float] = {}
+        self._take_profits: Dict[str, float] = {}
+        self._trailing_highs: Dict[str, float] = {}
+        self._trailing_lows: Dict[str, float] = {}
     
     def on_init(self):
         super().on_init()
         for symbol in self.symbols:
-            self._bar_buffers[symbol] = DataBuffer(max_size=self.slow_period * 2)
+            self._bar_buffers[symbol] = DataBuffer(max_size=max(self.trend_period, self.slow_period) * 2)
     
     def on_bar(self, bars: Dict[str, BarData]):
         for symbol, bar in bars.items():
@@ -449,24 +467,30 @@ class DualMAStrategy(BaseStrategy):
             
             # 更新K线缓冲
             if symbol not in self._bar_buffers:
-                self._bar_buffers[symbol] = DataBuffer(max_size=self.slow_period * 2)
+                self._bar_buffers[symbol] = DataBuffer(max_size=max(self.trend_period, self.slow_period) * 2)
             self._bar_buffers[symbol].append(bar)
             
-            # 数据不足
-            if len(self._bar_buffers[symbol]) < self.slow_period:
+            buffer = self._bar_buffers[symbol]
+            if len(buffer) < max(self.slow_period, self.trend_period):
                 continue
             
-            # 计算均线
-            closes = self._bar_buffers[symbol].get_array("close")
-            ma_fast = self.sma(closes, self.fast_period)[-1]
-            ma_slow = self.sma(closes, self.slow_period)[-1]
+            # 提取数据
+            closes = buffer.get_array("close")
+            highs = buffer.get_array("high")
+            lows = buffer.get_array("low")
             
-            if np.isnan(ma_fast) or np.isnan(ma_slow):
+            # 计算指标
+            ma_fast = self.ema(closes, self.fast_period)[-1]
+            ma_slow = self.ema(closes, self.slow_period)[-1]
+            ma_trend = self.ema(closes, self.trend_period)[-1]
+            atr_values = self.atr(highs, lows, closes, self.atr_period)
+            current_atr = atr_values[-1]
+            
+            if np.isnan(ma_fast) or np.isnan(ma_slow) or np.isnan(ma_trend) or np.isnan(current_atr):
                 continue
             
-            # 判断当前状态
-            current_state = "above" if ma_fast > ma_slow else "below"
-            last_state = self._last_ma_state.get(symbol)
+            # 市场状态检测
+            regime = self.detect_market_regime(closes, 30)
             
             # 获取持仓
             position = self.get_position(symbol)
@@ -477,24 +501,117 @@ class DualMAStrategy(BaseStrategy):
                 else:
                     current_pos = -position.volume
             
-            # 信号判断
-            if last_state == "below" and current_state == "above":
-                # 金叉 - 平空开多
-                if current_pos < 0:
-                    self.cover(symbol, bar.close, abs(current_pos))
-                if current_pos <= 0:
-                    self.buy(symbol, bar.close, 1)
-                    logger.info(f"{symbol} Golden Cross: Buy @ {bar.close}")
+            # 更新trailing stop
+            if current_pos > 0:
+                if symbol not in self._trailing_highs or bar.high > self._trailing_highs[symbol]:
+                    self._trailing_highs[symbol] = bar.high
+                    # 移动止损
+                    new_stop = bar.high - current_atr * self.atr_stop_multiplier
+                    if symbol in self._stop_losses:
+                        self._stop_losses[symbol] = max(self._stop_losses[symbol], new_stop)
             
-            elif last_state == "above" and current_state == "below":
-                # 死叉 - 平多开空
-                if current_pos > 0:
+            elif current_pos < 0:
+                if symbol not in self._trailing_lows or bar.low < self._trailing_lows[symbol]:
+                    self._trailing_lows[symbol] = bar.low
+                    new_stop = bar.low + current_atr * self.atr_stop_multiplier
+                    if symbol in self._stop_losses:
+                        self._stop_losses[symbol] = min(self._stop_losses[symbol], new_stop)
+            
+            # 止损止盈检查
+            if current_pos > 0:
+                stop_loss = self._stop_losses.get(symbol, 0)
+                take_profit = self._take_profits.get(symbol, float('inf'))
+                
+                if bar.close <= stop_loss:
                     self.sell(symbol, bar.close, current_pos)
-                if current_pos >= 0:
-                    self.short(symbol, bar.close, 1)
-                    logger.info(f"{symbol} Death Cross: Short @ {bar.close}")
+                    logger.info(f"{symbol} Stop Loss Hit: Sell @ {bar.close}, loss={bar.close - self._entry_prices.get(symbol, bar.close):.2f}")
+                    self._clear_trade_data(symbol)
+                    continue
+                elif bar.close >= take_profit:
+                    self.sell(symbol, bar.close, current_pos)
+                    logger.info(f"{symbol} Take Profit Hit: Sell @ {bar.close}, profit={bar.close - self._entry_prices.get(symbol, bar.close):.2f}")
+                    self._clear_trade_data(symbol)
+                    continue
+            
+            elif current_pos < 0:
+                stop_loss = self._stop_losses.get(symbol, float('inf'))
+                take_profit = self._take_profits.get(symbol, 0)
+                
+                if bar.close >= stop_loss:
+                    self.cover(symbol, bar.close, abs(current_pos))
+                    logger.info(f"{symbol} Stop Loss Hit: Cover @ {bar.close}")
+                    self._clear_trade_data(symbol)
+                    continue
+                elif bar.close <= take_profit:
+                    self.cover(symbol, bar.close, abs(current_pos))
+                    logger.info(f"{symbol} Take Profit Hit: Cover @ {bar.close}")
+                    self._clear_trade_data(symbol)
+                    continue
+            
+            # 判断当前状态
+            current_state = "above" if ma_fast > ma_slow else "below"
+            last_state = self._last_ma_state.get(symbol)
+            
+            # 趋势过滤器：价格必须在趋势线上方才做多，下方才做空
+            trend_filter_long = bar.close > ma_trend
+            trend_filter_short = bar.close < ma_trend
+            
+            # 只在非高波动市场交易
+            if regime == 'volatile':
+                self._last_ma_state[symbol] = current_state
+                continue
+            
+            # 信号判断 - 添加多重确认
+            if last_state == "below" and current_state == "above" and trend_filter_long:
+                # 额外确认：价格回调后突破
+                recent_high = np.max(highs[-5:])
+                if bar.close >= recent_high * 0.995:  # 突破近期高点
+                    # 金叉 - 平空开多
+                    if current_pos < 0:
+                        self.cover(symbol, bar.close, abs(current_pos))
+                        self._clear_trade_data(symbol)
+                    
+                    if current_pos <= 0:
+                        # 基于波动率调整仓位
+                        vol_percentile = self.calculate_volatility_percentile(closes, 60)
+                        size = 1 if vol_percentile < 0.8 else 1  # 高波动时可减仓
+                        
+                        self.buy(symbol, bar.close, size)
+                        self._entry_prices[symbol] = bar.close
+                        self._stop_losses[symbol] = bar.close - current_atr * self.atr_stop_multiplier
+                        self._take_profits[symbol] = bar.close + current_atr * self.atr_profit_multiplier
+                        self._trailing_highs[symbol] = bar.high
+                        logger.info(f"{symbol} Golden Cross [LONG]: Entry @ {bar.close}, Stop @ {self._stop_losses[symbol]:.2f}, Target @ {self._take_profits[symbol]:.2f}, Regime: {regime}")
+            
+            elif last_state == "above" and current_state == "below" and trend_filter_short:
+                # 额外确认：价格反弹后跌破
+                recent_low = np.min(lows[-5:])
+                if bar.close <= recent_low * 1.005:
+                    # 死叉 - 平多开空
+                    if current_pos > 0:
+                        self.sell(symbol, bar.close, current_pos)
+                        self._clear_trade_data(symbol)
+                    
+                    if current_pos >= 0 and regime != 'ranging':  # 震荡市不做空
+                        vol_percentile = self.calculate_volatility_percentile(closes, 60)
+                        size = 1 if vol_percentile < 0.8 else 1
+                        
+                        self.short(symbol, bar.close, size)
+                        self._entry_prices[symbol] = bar.close
+                        self._stop_losses[symbol] = bar.close + current_atr * self.atr_stop_multiplier
+                        self._take_profits[symbol] = bar.close - current_atr * self.atr_profit_multiplier
+                        self._trailing_lows[symbol] = bar.low
+                        logger.info(f"{symbol} Death Cross [SHORT]: Entry @ {bar.close}, Stop @ {self._stop_losses[symbol]:.2f}, Target @ {self._take_profits[symbol]:.2f}, Regime: {regime}")
             
             self._last_ma_state[symbol] = current_state
+    
+    def _clear_trade_data(self, symbol: str):
+        """清理交易数据"""
+        self._entry_prices.pop(symbol, None)
+        self._stop_losses.pop(symbol, None)
+        self._take_profits.pop(symbol, None)
+        self._trailing_highs.pop(symbol, None)
+        self._trailing_lows.pop(symbol, None)
 
 
 class TurtleStrategy(BaseStrategy):
