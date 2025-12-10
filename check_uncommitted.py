@@ -8,49 +8,42 @@ import subprocess
 import sys
 
 
-def check_uncommitted_changes():
+def get_git_status():
     """
-    Check if there are any uncommitted changes in the repository.
+    Get the git status output.
     
     Returns:
-        bool: True if there are uncommitted changes, False otherwise
+        str: Output from git status --porcelain
+    
+    Raises:
+        SystemExit: If git command fails
     """
     try:
-        # Run git status --porcelain to check for changes
         result = subprocess.run(
             ['git', 'status', '--porcelain'],
             capture_output=True,
             text=True,
             check=True
         )
-        
-        return bool(result.stdout.strip())
+        return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         print(f"Error running git command: {e}", file=sys.stderr)
-        return False
+        print("Make sure you're in a git repository.", file=sys.stderr)
+        sys.exit(2)
 
 
 def main():
     """Main function to check for uncommitted changes and exit accordingly."""
     print("Checking for uncommitted changes...")
     
-    if check_uncommitted_changes():
+    status_output = get_git_status()
+    
+    if status_output:
         print("❌ ERROR: Uncommitted changes detected!")
         print()
-        
-        # Show the uncommitted changes
-        try:
-            result = subprocess.run(
-                ['git', 'status', '--porcelain'],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            print("The following files have uncommitted changes:")
-            print(result.stdout)
-        except subprocess.CalledProcessError:
-            pass
-        
+        print("The following files have uncommitted changes:")
+        print(status_output)
+        print()
         print("Please commit or stash these changes before proceeding.")
         sys.exit(1)
     else:
