@@ -1,0 +1,245 @@
+# 系统配置文件
+
+# ==================== 期货公司配置 ====================
+broker:
+  # 支持的交易接口：ctp, tqsdk, vnpy
+  api_type: "tqsdk"  # 建议新手用tqsdk，已打包好，无需配置CTP
+  
+  # 如果用CTP，配置以下信息
+  ctp:
+    front_address: "tcp://127.0.0.1:6000"  # CTP前置地址（由期货公司提供）
+    broker_id: "9999"                       # 期货公司编码
+    investor_id: "YOUR_INVESTOR_ID"         # 投资者编号
+    password: "YOUR_PASSWORD"               # 交易密码
+    auth_code: ""                           # 认证编码（某些期货公司需要）
+    app_id: ""                              # 应用ID（某些期货公司需要）
+
+# ==================== 交易品种配置 ====================
+trading:
+  # 交易品种列表（中国期货代码）
+  symbols:
+    - "RB"      # 螺纹钢
+    - "IF"      # 沪深300指数期货
+    - "IO"      # 铁矿石
+    - "A"       # 豆一
+    - "B"       # 豆二
+    - "M"       # 豆粕
+    - "OI"      # 菜籽油
+  
+  # 交易时间（中国期货交易时间）
+  trading_hours:
+    - "09:30-11:30"   # 上午场
+    - "13:30-15:00"   # 下午场（部分品种）
+    - "21:00-23:30"   # 夜间场（商品期货）
+  
+  # 滑点设置（单位：点数）
+  slippage: 0.5       # 0.5个点数
+  
+  # 手续费设置（相对于合约价值的百分比）
+  commission: 0.0001  # 0.01%
+
+# ==================== 多因子模型配置 ====================
+multi_factor:
+  # 因子权重配置
+  weights:
+    technical: 0.30        # 技术因子权重
+    fund_flow: 0.25        # 资金面因子权重
+    sentiment: 0.25        # 情绪因子权重
+    correlation: 0.15      # 跨品种相关性权重
+    anomaly: 0.05          # 异常检测权重
+  
+  # 技术指标参数
+  technical:
+    rsi_period: 14         # RSI周期
+    macd_fast: 12          # MACD快线
+    macd_slow: 26          # MACD慢线
+    macd_signal: 9         # MACD信号线
+    bollinger_period: 20   # 布林带周期
+    bollinger_std: 2       # 布林带标准差
+  
+  # 信号生成阈值
+  signal_thresholds:
+    strong_buy: 0.75       # 强烈买入信号
+    buy: 0.60              # 买入信号
+    strong_sell: 0.25      # 强烈卖出信号
+    sell: 0.40             # 卖出信号
+  
+  # 权重动态调整
+  dynamic_weight:
+    enabled: true          # 是否启用动态权重调整
+    update_period: 5       # 每5天更新一次权重（根据实盘表现）
+
+# ==================== 网格交易配置 ====================
+grid_trading:
+  enabled: true           # 是否启用网格交易
+  
+  # 网格参数
+  grid:
+    grid_width: 10        # 每个网格的价差（元）
+    grid_num: 20          # 网格数量
+    
+    # 示例：螺纹钢基础价格3700，网格宽度10，20个网格
+    # 则网格范围为3700±(10×20/2)=3700±100，即3600-3800
+  
+  # 不同品种的网格参数覆盖
+  symbol_override:
+    RB:                   # 螺纹钢
+      base_price: 3700
+      grid_width: 10
+      grid_num: 20
+    
+    IF:                   # 沪深300
+      base_price: 4000
+      grid_width: 20
+      grid_num: 15
+    
+    IO:                   # 铁矿石
+      base_price: 600
+      grid_width: 5
+      grid_num: 25
+  
+  # 网格交易的仓位管理
+  position_management:
+    max_position: 50      # 最大持仓手数
+    entry_step: 1         # 每步建仓手数
+    exit_step: 1          # 每步平仓手数
+
+# ==================== 风险管理配置 ====================
+risk_management:
+  # 仓位管理
+  position:
+    max_total_position: 100        # 总持仓限制（手数）
+    max_single_symbol: 50          # 单品种最大持仓（手数）
+    max_capital_usage: 0.80        # 最大资金使用率（80%）
+  
+  # 止损设置
+  stop_loss:
+    enabled: true
+    max_drawdown: 0.15            # 最大回撤（15%）
+    single_trade_loss: 0.05       # 单笔交易最大亏损（5%）
+    daily_loss_limit: 0.05        # 日度亏损限制（5%）
+  
+  # 波动性调整
+  volatility_adjustment:
+    enabled: true
+    high_volatility_threshold: 0.08   # 高波动阈值
+    medium_volatility_threshold: 0.05  # 中波动阈值
+    high_vol_position_ratio: 0.5      # 高波动时持仓比例
+    medium_vol_position_ratio: 0.75   # 中波动时持仓比例
+  
+  # 交易频率限制
+  frequency_limit:
+    max_orders_per_minute: 50     # 每分钟最多下单50次
+    max_orders_per_hour: 500      # 每小时最多下单500次
+    min_interval_between_orders: 0.1  # 下单最小间隔（秒）
+
+# ==================== 回测配置 ====================
+backtest:
+  # 回测数据范围
+  start_date: "2020-01-01"   # 回测开始日期
+  end_date: "2024-12-31"     # 回测结束日期
+  
+  # 初始资金
+  initial_capital: 1000000    # 初始资金100万
+  
+  # 数据周期
+  bar_type: "1m"             # 支持 "1m"（1分钟）、"5m"（5分钟）、"1h"（1小时）、"d"（日线）
+  
+  # 手续费和滑点（回测会使用这些参数）
+  slippage: 0.5              # 滑点（点数）
+  commission: 0.0001         # 手续费（%）
+  
+  # 并行回测
+  parallel:
+    enabled: true            # 是否启用并行回测
+    workers: 4               # 并行工作进程数
+
+# ==================== 数据配置 ====================
+data:
+  # 数据源
+  source: "tqsdk"            # 支持 tqsdk, vnpy
+  
+  # 数据存储
+  storage:
+    type: "csv"              # 支持 csv, postgresql
+    path: "./data/market_data"  # CSV文件存储路径
+    
+    # PostgreSQL配置（如果storage.type为postgresql）
+    postgresql:
+      host: "localhost"
+      port: 5432
+      user: "postgres"
+      password: "password"
+      database: "quant_trading"
+  
+  # 数据更新
+  update:
+    auto_download: true      # 自动下载缺失数据
+    update_frequency: "daily"  # 每日更新
+
+# ==================== 实盘配置 ====================
+live_trading:
+  enabled: false            # 是否启用实盘交易（谨慎！）
+  
+  # 实盘参数
+  initial_capital: 100000    # 实盘初始资金（建议从小资金开始）
+  
+  # 单位降级
+  position_reduction: 1.0    # 实盘持仓相对回测的缩放比例（0-1）
+                             # 0.5表示实盘持仓为回测的50%
+  
+  # 实盘交易限制
+  limits:
+    max_daily_loss: 0.05     # 单日亏损超过5%自动停止交易
+    max_monthly_loss: 0.10   # 单月亏损超过10%自动停止交易
+    trading_pause_hours: []  # 停止交易的时间段（可选）
+
+# ==================== 日志配置 ====================
+logging:
+  level: "INFO"              # 日志级别：DEBUG, INFO, WARNING, ERROR
+  
+  # 日志输出
+  console: true              # 输出到控制台
+  file: true                 # 输出到文件
+  file_path: "./logs"        # 日志文件存储路径
+  
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# ==================== 通知配置 ====================
+notification:
+  enabled: true
+  
+  # 通知方式
+  methods:
+    - "console"              # 控制台通知
+    - "email"                # 邮件通知（可选）
+    - "wechat"               # 微信通知（可选）
+  
+  # 邮件配置
+  email:
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender: "your_email@gmail.com"
+    password: "your_password"
+    receiver: "your_email@gmail.com"
+  
+  # 微信通知配置（企业微信机器人）
+  wechat:
+    webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx"
+
+# ==================== 监控配置 ====================
+monitoring:
+  enabled: true
+  
+  # 监控指标
+  metrics:
+    - "daily_pnl"            # 日度盈亏
+    - "total_return"         # 总收益
+    - "drawdown"             # 回撤
+    - "win_rate"             # 胜率
+    - "signal_count"         # 信号数
+  
+  # 监控频率
+  check_frequency: 60        # 每60秒检查一次指标
+
