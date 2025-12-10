@@ -1,0 +1,4 @@
+2025-12-10 19:59:58 - strategies.base_strategy - INFO - Strategy 'CombinedStrategy' initialized
+2025-12-10 19:59:58 - strategies.base_strategy - INFO - Strategy 'FactorStrategy' initialized
+2025-12-10 19:59:58 - strategies.base_strategy - INFO - Strategy 'GridStrategy' initialized
+2025-12-10 20:05:02 - strategies.base_strategy - INFO - Strategy 'FactorStrategy' initialized
