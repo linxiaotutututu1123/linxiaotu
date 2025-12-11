@@ -261,11 +261,11 @@ def live_trade(config, broker):
             
             # 初始化组件
             data_manager = DataManager(settings.data)
-            risk_manager = RiskManager(settings.risk)
+            risk_manager = RiskManager()  # 使用默认风控配置
             
             # 创建策略
             strategies = [
-                DualMAStrategy(name="DualMA", symbols=settings.trading.symbols),
+                DualMAStrategy(symbols=settings.trading.symbols),
             ]
             
             # 创建执行引擎

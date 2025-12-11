@@ -903,9 +903,9 @@ class BacktestEngine:
         
         # 评估是否达标
         if metrics.is_valid():
-            print("✅ 策略绩效达到基本要求!")
+            print("[OK] 策略绩效达到基本要求!")
         else:
-            print("⚠️ 策略绩效未达标，建议优化:")
+            print("[!] 策略绩效未达标，建议优化:")
             if metrics.sharpe_ratio < 1.5:
                 print(f"   - 夏普比率偏低 ({metrics.sharpe_ratio:.2f} < 1.5)")
             if metrics.max_drawdown > 0.20:
