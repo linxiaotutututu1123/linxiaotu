@@ -160,12 +160,12 @@ def paper_trade(config, symbols):
             
             # 初始化组件
             data_manager = DataManager(settings.data)
-            risk_manager = RiskManager(settings.risk)
+            risk_manager = RiskManager()  # 使用默认风控配置
             
             # 创建策略组合
             strategies = [
-                DualMAStrategy(name="DualMA", symbols=symbols_list),
-                MomentumStrategy(name="Momentum", symbols=symbols_list),
+                DualMAStrategy(symbols=symbols_list),
+                MomentumStrategy(symbols=symbols_list),
             ]
             
             portfolio = MultiStrategyPortfolio(
