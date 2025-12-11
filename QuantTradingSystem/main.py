@@ -89,10 +89,10 @@ def backtest(config, strategy, symbol, start, end, capital):
         
         # 创建策略
         strategy_map = {
-            'dual_ma': DualMAStrategy(name="DualMA", symbols=[symbol]),
-            'turtle': TurtleStrategy(name="Turtle", symbols=[symbol]),
-            'grid': GridStrategy(name="Grid", symbols=[symbol]),
-            'momentum': MomentumStrategy(name="Momentum", symbols=[symbol]),
+            'dual_ma': DualMAStrategy(symbols=[symbol]),
+            'turtle': TurtleStrategy(symbols=[symbol]),
+            'grid': GridStrategy(symbols=[symbol]),
+            'momentum': MomentumStrategy(symbols=[symbol]),
         }
         
         if strategy not in strategy_map:
@@ -105,23 +105,28 @@ def backtest(config, strategy, symbol, start, end, capital):
         backtest_config = BacktestConfig(
             initial_capital=capital,
             commission_rate=0.0003,
-            slippage=1.0,
-            start_date=start,
-            end_date=end
+            slippage_ticks=1
         )
         
         engine = BacktestEngine(backtest_config)
         
+        # 添加策略和数据
+        engine.add_strategy(selected_strategy)
+        engine.add_data(symbol, df)
+        
         # 运行回测
         logger.info("Running backtest...")
-        result = engine.run(selected_strategy, df)
+        result = engine.run()
+        
+        # 获取账户信息
+        final_account = engine.get_account()
         
         # 输出结果
         logger.info("=" * 50)
         logger.info("回测结果 Backtest Results")
         logger.info("=" * 50)
         logger.info(f"初始资金: ¥{capital:,.2f}")
-        logger.info(f"最终权益: ¥{result.final_equity:,.2f}")
+        logger.info(f"最终权益: ¥{final_account.balance:,.2f}")
         logger.info(f"总收益率: {result.total_return*100:.2f}%")
         logger.info(f"年化收益: {result.annual_return*100:.2f}%")
         logger.info(f"夏普比率: {result.sharpe_ratio:.2f}")
