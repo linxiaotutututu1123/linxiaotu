@@ -359,5 +359,100 @@ cli.add_command(live_trade, name='live')
 cli.add_command(monitor)
 
 
+def run_gui_launcher():
+    """启动图形化启动器"""
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    import threading
+    import webbrowser
+    import time
+    
+    def start_monitor():
+        def run_server():
+            try:
+                import uvicorn
+                from frontend.api_server import app
+                uvicorn.run(app, host="127.0.0.1", port=8000, log_level="error")
+            except Exception as e:
+                messagebox.showerror("错误", f"启动监控服务失败:\n{str(e)}")
+
+        # 在新线程启动服务器
+        t = threading.Thread(target=run_server, daemon=True)
+        t.start()
+        
+        # 等待服务器启动
+        time.sleep(1.5)
+        
+        # 打开浏览器
+        webbrowser.open("http://127.0.0.1:8000")
+        status_label.config(text="监控服务已启动 (http://127.0.0.1:8000)")
+
+    def run_backtest():
+        try:
+            # 简单的回测启动示例
+            cmd = f"python main.py backtest -s {strategy_var.get()} --symbol {symbol_var.get()}"
+            messagebox.showinfo("提示", f"将在控制台运行回测:\n{cmd}\n\n(请在命令行查看详细输出)")
+            # 这里可以扩展为调用实际的backtest函数，并捕获输出显示在GUI中
+        except Exception as e:
+            messagebox.showerror("错误", f"运行回测失败:\n{str(e)}")
+
+    root = tk.Tk()
+    root.title("量化交易系统 v1.0.0")
+    root.geometry("500x400")
+    
+    # 样式
+    style = ttk.Style()
+    style.configure("TButton", padding=10, font=("Microsoft YaHei", 10))
+    style.configure("TLabel", font=("Microsoft YaHei", 10))
+    
+    # 标题
+    ttk.Label(root, text="量化交易系统", font=("Microsoft YaHei", 16, "bold")).pack(pady=20)
+    
+    # 监控面板
+    frame_monitor = ttk.LabelFrame(root, text="实时监控", padding=15)
+    frame_monitor.pack(fill="x", padx=20, pady=10)
+    
+    ttk.Button(frame_monitor, text="启动监控面板 (Web)", command=start_monitor).pack(fill="x")
+    status_label = ttk.Label(frame_monitor, text="服务未启动", foreground="gray")
+    status_label.pack(pady=5)
+    
+    # 策略回测
+    frame_backtest = ttk.LabelFrame(root, text="快速回测", padding=15)
+    frame_backtest.pack(fill="x", padx=20, pady=10)
+    
+    frame_params = ttk.Frame(frame_backtest)
+    frame_params.pack(fill="x", pady=5)
+    
+    ttk.Label(frame_params, text="策略:").pack(side="left")
+    strategy_var = tk.StringVar(value="dual_ma")
+    ttk.Combobox(frame_params, textvariable=strategy_var, values=["dual_ma", "turtle", "grid", "momentum"], width=10).pack(side="left", padx=5)
+    
+    ttk.Label(frame_params, text="合约:").pack(side="left", padx=(10, 0))
+    symbol_var = tk.StringVar(value="rb2501")
+    ttk.Entry(frame_params, textvariable=symbol_var, width=10).pack(side="left", padx=5)
+    
+    ttk.Button(frame_backtest, text="运行回测", command=run_backtest).pack(fill="x", pady=5)
+    
+    # 底部信息
+    ttk.Label(root, text="支持: 回测 | 模拟 | 实盘 | 监控", font=("Arial", 8), foreground="gray").pack(side="bottom", pady=10)
+    
+    root.mainloop()
+
+
 if __name__ == '__main__':
-    cli()
+    try:
+        # 如果没有命令行参数，启动GUI启动器
+        if len(sys.argv) == 1:
+            run_gui_launcher()
+        else:
+            cli()
+    except Exception as e:
+        # 捕获所有未处理异常，防止闪退
+        import traceback
+        error_msg = f"程序发生严重错误:\n{str(e)}\n\n{traceback.format_exc()}"
+        try:
+            import tkinter.messagebox
+            tkinter.messagebox.showerror("严重错误", error_msg)
+        except:
+            print(error_msg)
+            input("按回车键退出...")

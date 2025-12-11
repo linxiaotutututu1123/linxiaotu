@@ -63,7 +63,7 @@ class RiskCheckResult:
 
 @dataclass
 class RiskManagerConfig:
-    """风控配置 - 优化目标: 年化50%+, 最大回撤<8%, 单笔亏损<2%"""
+    """风控配置 - 优化目标: 年化50%+, 最大回撤<5%, 单笔亏损<2%"""
     # 单笔风险 - 严格控制在2%以内
     max_loss_per_trade: float = 0.015      # 单笔最大亏损比例(1.5%)
     max_order_value: float = 0.06          # 单笔最大委托金额比例(6%)
@@ -85,10 +85,10 @@ class RiskManagerConfig:
     min_volume_threshold: int = 5000       # 最小成交量阈值
     max_volume_participation: float = 0.02 # 最大成交量占比(2%)
     
-    # 回撤风险 - 严格控制在8%以内
-    max_drawdown: float = 0.08             # 最大回撤阈值(8%)
+    # 回撤风险 - 严格控制在5%以内
+    max_drawdown: float = 0.05             # 最大回撤阈值(5%)
     drawdown_reduce_ratio: float = 0.6     # 回撤达阈值时减仓比例
-    drawdown_warning_level: float = 0.04   # 回撤预警水平(4%)
+    drawdown_warning_level: float = 0.03   # 回撤预警水平(3%)
     
     # 波动风险
     volatility_scaling: bool = True        # 是否启用波动率缩放

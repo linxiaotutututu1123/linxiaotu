@@ -97,11 +97,11 @@ class RiskConfig:
     # 第五层：极端风险
     black_swan_circuit_breaker: bool = True   # 黑天鹅熔断机制
     volatility_scaling: bool = True           # 波动率自适应仓位
-    max_leverage: float = 3.0                 # 最大杠杆倍数
+    max_leverage: float = 1.5                 # 最大杠杆倍数 (降低杠杆以控制风险)
     
     # 流动性风险
-    min_volume_threshold: int = 2000          # 最小成交量阈值（手/分钟）
-    max_slippage: float = 0.002               # 最大滑点容忍度 0.2%
+    min_volume_threshold: int = 5000          # 最小成交量阈值（手/分钟）(提高流动性要求)
+    max_slippage: float = 0.001               # 最大滑点容忍度 0.1% (更严格)
 
 # ==================== 策略配置 ====================
 @dataclass
@@ -179,25 +179,15 @@ class ExecutionConfig:
 @dataclass
 class PerformanceTarget:
     """绩效目标配置"""
-    # 保守目标
-    conservative_annual_return: float = 0.20   # 年化收益 20%
-    conservative_max_drawdown: float = 0.10    # 最大回撤 10%
-    conservative_sharpe_ratio: float = 1.5     # 夏普比率 1.5
-    
-    # 中等目标
-    moderate_annual_return: float = 0.35       # 年化收益 35%
-    moderate_max_drawdown: float = 0.15        # 最大回撤 15%
-    moderate_sharpe_ratio: float = 2.0         # 夏普比率 2.0
-    
-    # 激进目标
+    # 激进目标 (用户定制)
     aggressive_annual_return: float = 0.50     # 年化收益 50%+
-    aggressive_max_drawdown: float = 0.20      # 最大回撤 20%
+    aggressive_max_drawdown: float = 0.05      # 最大回撤 5% (严格控制)
     aggressive_sharpe_ratio: float = 2.5       # 夏普比率 2.5+
     
     # 通用指标要求
     min_monthly_win_rate: float = 0.65         # 月度胜率 65%
-    max_drawdown_duration_days: int = 60       # 最长回撤周期 60天
-    min_profit_factor: float = 2.0             # 盈亏比 2.0
+    max_drawdown_duration_days: int = 30       # 最长回撤周期 30天 (缩短)
+    min_profit_factor: float = 2.5             # 盈亏比 2.5 (提高)
 
 # ==================== 日志配置 ====================
 @dataclass
@@ -233,3 +223,17 @@ class Settings:
 
 # 创建全局配置实例
 settings = Settings()
+
+
+def load_settings(config_path: Optional[str] = None) -> Settings:
+    """加载配置文件
+    
+    Args:
+        config_path: 配置文件路径（可选，目前返回默认配置）
+        
+    Returns:
+        Settings: 配置实例
+    """
+    s = Settings()
+    s.load_from_env()
+    return s
