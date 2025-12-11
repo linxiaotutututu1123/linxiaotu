@@ -2,7 +2,7 @@
 核心数据结构与接口定义。
 """
 
-from market_gateway.core.models import (
+from HHH.models import (
     ExchangeType,
     TimestampSource,
     TickData,
