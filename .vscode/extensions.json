@@ -1,7 +1,7 @@
 {
     "recommendations": [
-        "github.copilot",
         "ms-dotnettools.vscode-dotnet-runtime",
-        "ms-ceintl.vscode-language-pack-zh-hans"
+        "ms-ceintl.vscode-language-pack-zh-hans",
+        "github.copilot"
     ]
 }
