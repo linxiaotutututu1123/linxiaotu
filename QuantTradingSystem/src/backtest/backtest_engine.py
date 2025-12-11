@@ -34,19 +34,21 @@ class BacktestConfig:
     start_date: datetime = None
     end_date: datetime = None
     
-    # 手续费配置
-    commission_rate: float = 0.0001       # 手续费率（万分之一）
+    # 手续费配置 - 更真实的费率
+    commission_rate: float = 0.00025      # 手续费率（万分之2.5）
     commission_fixed: float = 0.0         # 固定手续费（每手）
     commission_min: float = 0.0           # 最低手续费
     
-    # 滑点配置
-    slippage_mode: str = "fixed"          # fixed / adaptive / model
-    slippage_rate: float = 0.0001         # 固定滑点率
-    slippage_ticks: int = 1               # 固定滑点跳数
+    # 滑点配置 - 更真实的滑点
+    slippage_mode: str = "adaptive"       # fixed / adaptive / model
+    slippage_rate: float = 0.0002         # 固定滑点率
+    slippage_ticks: int = 2               # 固定滑点跳数(更保守)
+    slippage_volatility_factor: float = 0.5  # 波动率滑点因子
     
     # 撮合配置
     match_mode: str = "next_bar"          # next_bar / current_bar / tick
-    volume_limit: float = 0.1             # 成交量限制（最大成交占当前成交量比例）
+    volume_limit: float = 0.05            # 成交量限制（更保守5%）
+    partial_fill_enabled: bool = True     # 启用部分成交
     
     # 保证金配置
     margin_ratio: float = 0.1             # 默认保证金比例
@@ -55,6 +57,10 @@ class BacktestConfig:
     # 合约配置
     contract_size: float = 10.0           # 合约乘数
     price_tick: float = 1.0               # 最小价格变动
+    
+    # 市场冲击配置
+    market_impact_enabled: bool = True    # 启用市场冲击模型
+    market_impact_factor: float = 0.1     # 市场冲击因子
 
 
 # ==================== 订单撮合引擎 ====================
@@ -207,28 +213,61 @@ class MatchEngine:
     
     def _calculate_slippage(self, order: OrderData, bar: BarData) -> float:
         """
-        计算滑点
+        计算滑点 - 增强版
         支持固定滑点、自适应滑点、模型滑点
+        
+        更真实的滑点模拟考虑:
+        1. 市场波动率
+        2. 订单大小相对于成交量
+        3. 市场冲击成本
+        4. 价格跳动最小单位
         """
+        base_slippage = 0.0
+        
         if self.config.slippage_mode == "fixed":
             # 固定滑点
-            slippage = self.config.price_tick * self.config.slippage_ticks
+            base_slippage = self.config.price_tick * self.config.slippage_ticks
         
         elif self.config.slippage_mode == "adaptive":
             # 自适应滑点（根据波动率和成交量）
+            # 1. 波动率成分
             volatility = bar.range / bar.close if bar.close > 0 else 0
-            volume_factor = order.volume / bar.volume if bar.volume > 0 else 1
-            slippage = bar.close * volatility * volume_factor * 0.5
+            volatility_slippage = bar.close * volatility * self.config.slippage_volatility_factor
+            
+            # 2. 成交量成分 - 订单越大相对于成交量，滑点越大
+            volume_ratio = order.volume / bar.volume if bar.volume > 0 else 1
+            volume_slippage = bar.close * volume_ratio * 0.001
+            
+            # 3. 市场冲击成本
+            market_impact = 0.0
+            if self.config.market_impact_enabled:
+                # 平方根市场冲击模型
+                import math
+                participation_rate = min(volume_ratio, 1.0)
+                market_impact = bar.close * self.config.market_impact_factor * math.sqrt(participation_rate)
+            
+            base_slippage = volatility_slippage + volume_slippage + market_impact
+            
+            # 确保滑点至少为1个tick
+            base_slippage = max(base_slippage, self.config.price_tick)
         
         elif self.config.slippage_mode == "model":
             # 模型滑点（预留接口）
             if self._slippage_model:
-                slippage = self._slippage_model.predict(order, bar)
+                base_slippage = self._slippage_model.predict(order, bar)
             else:
-                slippage = self.config.price_tick * self.config.slippage_ticks
+                base_slippage = self.config.price_tick * self.config.slippage_ticks
         
         else:
-            slippage = 0.0
+            base_slippage = self.config.price_tick
+        
+        # 滑点取整到最小价格变动单位
+        ticks = int(base_slippage / self.config.price_tick + 0.5)
+        slippage = ticks * self.config.price_tick
+        
+        # 设置最大滑点限制（不超过K线振幅的30%）
+        max_slippage = bar.range * 0.3
+        slippage = min(slippage, max_slippage)
         
         return slippage
     

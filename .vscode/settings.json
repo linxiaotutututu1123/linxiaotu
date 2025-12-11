@@ -1,3 +1,5 @@
 {
-    "python.analysis.autoImportCompletions": true
+    "python.analysis.autoImportCompletions": true,
+    "chat.agent.maxRequests": 2599999,
+    "chat.agent.thinking.collapsedTools": "all"
 }

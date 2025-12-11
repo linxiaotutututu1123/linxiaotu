@@ -15,7 +15,8 @@ from .advanced_strategies import (
     SpreadArbitrageStrategy,
     CrossSymbolArbitrageStrategy,
     MultiStrategyPortfolio,
-    AdaptiveStrategy
+    AdaptiveStrategy,
+    AIEnhancedStrategy
 )
 
 __all__ = [
@@ -31,5 +32,7 @@ __all__ = [
     "SpreadArbitrageStrategy",
     "CrossSymbolArbitrageStrategy",
     "MultiStrategyPortfolio",
-    "AdaptiveStrategy"
+    "AdaptiveStrategy",
+    # AI增强策略
+    "AIEnhancedStrategy"
 ]
