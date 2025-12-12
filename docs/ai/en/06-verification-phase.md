@@ -142,7 +142,8 @@ codeql database create --language=python codeql-db
 codeql database analyze codeql-db --format=sarif-latest --output=results.sarif
 
 # Review findings
-codeql bqrs decode results.bqrs
+# View SARIF results directly or use GitHub's code scanning interface
+cat results.sarif | jq '.runs[0].results'
 ```
 
 ### Manual Security Checks

@@ -226,7 +226,7 @@ class Trade:
 ```
 
 ### Configuration Models
-All configuration should be in `config/settings.yaml`:
+All configuration for the trading system is centralized in `quant-trading-system/config/settings.yaml`:
 ```yaml
 multi_factor:
   weights:

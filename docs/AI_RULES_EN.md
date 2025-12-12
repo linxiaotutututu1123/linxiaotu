@@ -123,7 +123,10 @@ For detailed guidance on each phase, consult the execution library:
 ## 🎯 Project-Specific Rules
 
 ### Quantitative Trading System
-- All strategies must inherit from `BaseStrategy`
+
+For changes to the `quant-trading-system/` directory:
+
+- All strategies must inherit from `BaseStrategy` (see `strategies/base_strategy.py`)
 - All strategies must implement `generate_signals()` method
 - New strategies require backtest validation before deployment
 - Risk limits are defined in `config/settings.yaml`
