@@ -1,0 +1,52 @@
+# 量化交易系统依赖
+# Quantitative Trading System Dependencies
+
+# ============ 核心依赖 ============
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# ============ 数据获取 ============
+tqsdk>=3.0.0            # 天勤量化SDK
+tushare>=1.2.0          # Tushare数据
+akshare>=1.0.0          # AkShare数据
+
+# ============ 数据库 ============
+redis>=4.0.0            # Redis缓存
+sqlalchemy>=1.4.0       # ORM
+psycopg2-binary>=2.9.0  # PostgreSQL
+influxdb-client>=1.30.0 # InfluxDB时序数据库
+
+# ============ 深度学习 ============
+torch>=1.12.0           # PyTorch
+transformers>=4.20.0    # Huggingface Transformers
+scikit-learn>=1.0.0     # 机器学习工具
+
+# ============ Web框架 ============
+fastapi>=0.85.0         # FastAPI
+uvicorn>=0.18.0         # ASGI服务器
+websockets>=10.0        # WebSocket支持
+pydantic>=1.10.0        # 数据验证
+
+# ============ 可视化 ============
+plotly>=5.10.0          # 交互式图表
+matplotlib>=3.5.0       # 基础绑图
+
+# ============ 工具库 ============
+python-dotenv>=0.20.0   # 环境变量
+loguru>=0.6.0           # 日志
+schedule>=1.1.0         # 定时任务
+click>=8.0.0            # 命令行
+pyyaml>=6.0             # YAML配置
+pyarrow>=9.0.0          # Parquet支持
+
+# ============ 开发工具 ============
+pytest>=7.0.0           # 测试框架
+pytest-asyncio>=0.20.0  # 异步测试
+black>=22.0.0           # 代码格式化
+flake8>=5.0.0           # 代码检查
+mypy>=0.990             # 类型检查
+
+# ============ 交易接口(可选) ============
+# vnpy>=3.0.0           # VN.PY交易框架
+# ctpbee>=1.0.0         # CTP封装

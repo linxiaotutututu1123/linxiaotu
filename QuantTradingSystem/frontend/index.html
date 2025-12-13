@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>量化交易监控系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        /* Card 样式 - 白色背景，圆角，阴影，内边距 */
+        .card {
+            background-color: white;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            padding: 1rem;
+        }
+        /* 状态指示点 */
+        .status-dot {
+            width: 0.75rem;
+            height: 0.75rem;
+            border-radius: 9999px;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+        .status-running { background-color: #22c55e; }
+        .status-stopped { background-color: #ef4444; }
+        .status-warning { background-color: #eab308; }
+        
+        /* 数字滚动动画 */
+        .number-change {
+            transition: color 0.3s;
+        }
+        .number-up { color: #22c55e; }
+        .number-down { color: #ef4444; }
+        
+        /* 表格样式 */
+        .data-table {
+            width: 100%;
+            font-size: 0.875rem;
+        }
+        .data-table th {
+            text-align: left;
+            padding: 0.5rem 0.75rem;
+            background-color: #f3f4f6;
+            font-weight: 500;
+        }
+        .data-table td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+        .data-table tr:hover {
+            background-color: #f9fafb;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div id="app">
+        <!-- 顶部导航 -->
+        <nav class="bg-blue-600 text-white shadow-lg">
+            <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+                <h1 class="text-xl font-bold">📈 量化交易监控系统</h1>
+                <div class="flex items-center space-x-4">
+                    <span class="flex items-center">
+                        <span :class="['status-dot', status.running ? 'status-running' : 'status-stopped']"></span>
+                        {{ status.running ? '运行中' : '已停止' }}
+                    </span>
+                    <span class="text-sm opacity-80">{{ status.uptime }}</span>
+                    <span :class="['px-2 py-1 rounded text-xs', status.paper_trading ? 'bg-yellow-500' : 'bg-green-500']">
+                        {{ status.paper_trading ? '模拟交易' : '实盘交易' }}
+                    </span>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container mx-auto px-4 py-6">
+            <!-- 账户概览 -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="card">
+                    <div class="text-gray-500 text-sm">账户余额</div>
+                    <div class="text-2xl font-bold">{{ formatMoney(account.balance) }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-gray-500 text-sm">可用资金</div>
+                    <div class="text-2xl font-bold text-blue-600">{{ formatMoney(account.available) }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-gray-500 text-sm">冻结资金</div>
+                    <div class="text-2xl font-bold text-gray-600">{{ formatMoney(account.frozen) }}</div>
+                </div>
+                <div class="card">
+                    <div class="text-gray-500 text-sm">总盈亏</div>
+                    <div :class="['text-2xl font-bold', account.total_pnl >= 0 ? 'text-green-600' : 'text-red-600']">
+                        {{ formatMoney(account.total_pnl) }}
+                        <span class="text-sm">({{ account.total_pnl_ratio.toFixed(2) }}%)</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- 持仓列表 -->
+                <div class="lg:col-span-2">
+                    <div class="card">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-lg font-semibold">📊 持仓列表</h2>
+                            <span class="text-sm text-gray-500">共 {{ positions.length }} 个持仓</span>
+                        </div>
+                        <table class="data-table" v-if="positions.length > 0">
+                            <thead>
+                                <tr>
+                                    <th>合约</th>
+                                    <th>方向</th>
+                                    <th>数量</th>
+                                    <th>均价</th>
+                                    <th>现价</th>
+                                    <th>盈亏</th>
+                                    <th>盈亏比</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="pos in positions" :key="pos.symbol">
+                                    <td class="font-medium">{{ pos.symbol }}</td>
+                                    <td :class="pos.direction === 'long' ? 'text-red-500' : 'text-green-500'">
+                                        {{ pos.direction === 'long' ? '多' : '空' }}
+                                    </td>
+                                    <td>{{ pos.volume }}</td>
+                                    <td>{{ pos.avg_price.toFixed(2) }}</td>
+                                    <td>{{ pos.current_price.toFixed(2) }}</td>
+                                    <td :class="pos.pnl >= 0 ? 'text-green-600' : 'text-red-600'">
+                                        {{ formatMoney(pos.pnl) }}
+                                    </td>
+                                    <td :class="pos.pnl_ratio >= 0 ? 'text-green-600' : 'text-red-600'">
+                                        {{ pos.pnl_ratio.toFixed(2) }}%
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div v-else class="text-center text-gray-400 py-8">暂无持仓</div>
+                    </div>
+
+                    <!-- 订单列表 -->
+                    <div class="card mt-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-lg font-semibold">📋 订单列表</h2>
+                            <div class="space-x-2">
+                                <button @click="orderFilter = 'all'" 
+                                    :class="['px-3 py-1 rounded text-sm', orderFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-200']">
+                                    全部
+                                </button>
+                                <button @click="orderFilter = 'active'" 
+                                    :class="['px-3 py-1 rounded text-sm', orderFilter === 'active' ? 'bg-blue-600 text-white' : 'bg-gray-200']">
+                                    活跃
+                                </button>
+                                <button @click="orderFilter = 'filled'" 
+                                    :class="['px-3 py-1 rounded text-sm', orderFilter === 'filled' ? 'bg-blue-600 text-white' : 'bg-gray-200']">
+                                    已成交
+                                </button>
+                            </div>
+                        </div>
+                        <table class="data-table" v-if="filteredOrders.length > 0">
+                            <thead>
+                                <tr>
+                                    <th>订单号</th>
+                                    <th>合约</th>
+                                    <th>方向</th>
+                                    <th>数量</th>
+                                    <th>价格</th>
+                                    <th>状态</th>
+                                    <th>时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="order in filteredOrders" :key="order.order_id">
+                                    <td class="font-mono text-xs">{{ order.order_id.substring(0, 12) }}...</td>
+                                    <td>{{ order.symbol }}</td>
+                                    <td :class="order.direction === 'long' ? 'text-red-500' : 'text-green-500'">
+                                        {{ order.direction === 'long' ? '买入' : '卖出' }}
+                                    </td>
+                                    <td>{{ order.volume }}</td>
+                                    <td>{{ order.price ? order.price.toFixed(2) : '市价' }}</td>
+                                    <td>
+                                        <span :class="['px-2 py-1 rounded text-xs', getStatusClass(order.status)]">
+                                            {{ getStatusText(order.status) }}
+                                        </span>
+                                    </td>
+                                    <td class="text-xs text-gray-500">{{ formatTime(order.timestamp) }}</td>
+                                    <td>
+                                        <button v-if="order.status === 'active'" 
+                                            @click="cancelOrder(order.order_id)"
+                                            class="text-red-500 hover:text-red-700 text-sm">
+                                            撤单
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div v-else class="text-center text-gray-400 py-8">暂无订单</div>
+                    </div>
+                </div>
+
+                <!-- 右侧面板 -->
+                <div class="space-y-6">
+                    <!-- 下单面板 -->
+                    <div class="card">
+                        <h2 class="text-lg font-semibold mb-4">📝 快速下单</h2>
+                        <form @submit.prevent="submitOrder" class="space-y-3">
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">合约代码</label>
+                                <input v-model="orderForm.symbol" type="text" 
+                                    class="w-full border rounded px-3 py-2" placeholder="如: rb2501">
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">方向</label>
+                                    <select v-model="orderForm.direction" class="w-full border rounded px-3 py-2">
+                                        <option value="long">买入(多)</option>
+                                        <option value="short">卖出(空)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">数量</label>
+                                    <input v-model.number="orderForm.volume" type="number" 
+                                        class="w-full border rounded px-3 py-2" min="1">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">类型</label>
+                                    <select v-model="orderForm.order_type" class="w-full border rounded px-3 py-2">
+                                        <option value="limit">限价</option>
+                                        <option value="market">市价</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">价格</label>
+                                    <input v-model.number="orderForm.price" type="number" 
+                                        class="w-full border rounded px-3 py-2" 
+                                        :disabled="orderForm.order_type === 'market'">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm text-gray-600 mb-1">算法</label>
+                                <select v-model="orderForm.algo" class="w-full border rounded px-3 py-2">
+                                    <option value="">直接执行</option>
+                                    <option value="twap">TWAP</option>
+                                    <option value="vwap">VWAP</option>
+                                    <option value="iceberg">冰山</option>
+                                </select>
+                            </div>
+                            <button type="submit" 
+                                class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition">
+                                提交订单
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- 策略列表 -->
+                    <div class="card">
+                        <h2 class="text-lg font-semibold mb-4">🤖 策略状态</h2>
+                        <div v-if="strategies.length > 0" class="space-y-3">
+                            <div v-for="strategy in strategies" :key="strategy.name" 
+                                class="flex items-center justify-between p-3 bg-gray-50 rounded">
+                                <div>
+                                    <div class="font-medium">{{ strategy.name }}</div>
+                                    <div class="text-sm text-gray-500">
+                                        胜率: {{ (strategy.win_rate * 100).toFixed(1) }}% | 
+                                        交易: {{ strategy.trade_count }}次
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div :class="strategy.pnl >= 0 ? 'text-green-600' : 'text-red-600'">
+                                        {{ formatMoney(strategy.pnl) }}
+                                    </div>
+                                    <button @click="toggleStrategy(strategy.name, strategy.enabled)"
+                                        :class="['text-xs px-2 py-1 rounded', 
+                                            strategy.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600']">
+                                        {{ strategy.enabled ? '运行中' : '已停止' }}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-else class="text-center text-gray-400 py-4">暂无策略</div>
+                    </div>
+
+                    <!-- 系统信息 -->
+                    <div class="card">
+                        <h2 class="text-lg font-semibold mb-4">⚙️ 系统信息</h2>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">策略数量</span>
+                                <span>{{ status.strategies_count }}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">活跃订单</span>
+                                <span>{{ status.active_orders }}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">持仓数量</span>
+                                <span>{{ status.open_positions }}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">连接状态</span>
+                                <span :class="status.connected ? 'text-green-600' : 'text-red-600'">
+                                    {{ status.connected ? '已连接' : '已断开' }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+        
+        createApp({
+            setup() {
+                // 状态数据
+                const status = ref({
+                    running: true,
+                    paper_trading: true,
+                    connected: false,
+                    strategies_count: 0,
+                    active_orders: 0,
+                    open_positions: 0,
+                    uptime: '0h 0m 0s'
+                });
+                
+                const account = ref({
+                    balance: 0,
+                    available: 0,
+                    frozen: 0,
+                    total_pnl: 0,
+                    total_pnl_ratio: 0
+                });
+                
+                const positions = ref([]);
+                const strategies = ref([]);
+                const orders = ref([]);
+                const orderFilter = ref('all');
+                
+                const orderForm = ref({
+                    symbol: '',
+                    direction: 'long',
+                    volume: 1,
+                    price: null,
+                    order_type: 'limit',
+                    algo: ''
+                });
+                
+                // WebSocket连接
+                let ws = null;
+                
+                const connectWebSocket = () => {
+                    const wsUrl = `ws://${window.location.hostname}:8000/ws`;
+                    ws = new WebSocket(wsUrl);
+                    
+                    ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        status.value.connected = true;
+                        // 订阅频道
+                        ws.send(JSON.stringify({ action: 'subscribe', channel: 'status' }));
+                        ws.send(JSON.stringify({ action: 'subscribe', channel: 'account' }));
+                        ws.send(JSON.stringify({ action: 'subscribe', channel: 'positions' }));
+                    };
+                    
+                    ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'status') {
+                            Object.assign(status.value, data.data);
+                        } else if (data.type === 'account') {
+                            Object.assign(account.value, data.data);
+                        } else if (data.type === 'positions') {
+                            positions.value = data.data;
+                        }
+                    };
+                    
+                    ws.onclose = () => {
+                        console.log('WebSocket disconnected');
+                        status.value.connected = false;
+                        setTimeout(connectWebSocket, 3000);
+                    };
+                    
+                    ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                    };
+                };
+                
+                // API调用
+                const apiBase = '/api';
+                
+                const fetchData = async () => {
+                    try {
+                        const [statusRes, accountRes, positionsRes, strategiesRes, ordersRes] = await Promise.all([
+                            fetch(`${apiBase}/status`).then(r => r.json()),
+                            fetch(`${apiBase}/account`).then(r => r.json()),
+                            fetch(`${apiBase}/positions`).then(r => r.json()),
+                            fetch(`${apiBase}/strategies`).then(r => r.json()),
+                            fetch(`${apiBase}/orders`).then(r => r.json())
+                        ]);
+                        
+                        Object.assign(status.value, statusRes);
+                        Object.assign(account.value, accountRes);
+                        positions.value = positionsRes;
+                        strategies.value = strategiesRes;
+                        orders.value = ordersRes;
+                    } catch (error) {
+                        console.error('Fetch data error:', error);
+                    }
+                };
+                
+                const submitOrder = async () => {
+                    try {
+                        const response = await fetch(`${apiBase}/orders`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(orderForm.value)
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            alert('订单提交成功: ' + result.order_id);
+                            fetchData();
+                        } else {
+                            alert('订单提交失败: ' + result.message);
+                        }
+                    } catch (error) {
+                        alert('订单提交错误: ' + error.message);
+                    }
+                };
+                
+                const cancelOrder = async (orderId) => {
+                    if (!confirm('确定要撤销此订单吗？')) return;
+                    try {
+                        await fetch(`${apiBase}/orders/${orderId}`, { method: 'DELETE' });
+                        fetchData();
+                    } catch (error) {
+                        alert('撤单失败: ' + error.message);
+                    }
+                };
+                
+                const toggleStrategy = async (name, enabled) => {
+                    try {
+                        await fetch(`${apiBase}/strategies/${name}/${enabled ? 'disable' : 'enable'}`, { 
+                            method: 'POST' 
+                        });
+                        fetchData();
+                    } catch (error) {
+                        console.error('Toggle strategy error:', error);
+                    }
+                };
+                
+                // 计算属性
+                const filteredOrders = computed(() => {
+                    if (orderFilter.value === 'all') return orders.value;
+                    return orders.value.filter(o => o.status === orderFilter.value);
+                });
+                
+                // 工具函数
+                const formatMoney = (value) => {
+                    if (value === undefined || value === null) return '¥0.00';
+                    return '¥' + value.toLocaleString('zh-CN', { minimumFractionDigits: 2 });
+                };
+                
+                const formatTime = (timestamp) => {
+                    if (!timestamp) return '';
+                    const date = new Date(timestamp);
+                    return date.toLocaleTimeString('zh-CN');
+                };
+                
+                const getStatusClass = (status) => {
+                    const classes = {
+                        'active': 'bg-blue-100 text-blue-700',
+                        'filled': 'bg-green-100 text-green-700',
+                        'cancelled': 'bg-gray-100 text-gray-600',
+                        'rejected': 'bg-red-100 text-red-700'
+                    };
+                    return classes[status] || 'bg-gray-100';
+                };
+                
+                const getStatusText = (status) => {
+                    const texts = {
+                        'active': '活跃',
+                        'filled': '已成交',
+                        'cancelled': '已撤销',
+                        'rejected': '已拒绝'
+                    };
+                    return texts[status] || status;
+                };
+                
+                // 生命周期
+                onMounted(() => {
+                    fetchData();
+                    connectWebSocket();
+                    // 定时刷新订单
+                    setInterval(() => {
+                        fetch(`${apiBase}/orders`).then(r => r.json()).then(data => {
+                            orders.value = data;
+                        });
+                    }, 5000);
+                });
+                
+                onUnmounted(() => {
+                    if (ws) ws.close();
+                });
+                
+                return {
+                    status,
+                    account,
+                    positions,
+                    strategies,
+                    orders,
+                    orderFilter,
+                    orderForm,
+                    filteredOrders,
+                    submitOrder,
+                    cancelOrder,
+                    toggleStrategy,
+                    formatMoney,
+                    formatTime,
+                    getStatusClass,
+                    getStatusText
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
