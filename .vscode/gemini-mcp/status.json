@@ -1,4 +1,5 @@
 {
+  "updatedAt": 1765598279305,
   "updatedAt": 1765486026182,
   "running": 0,
   "queued": 0,
@@ -8,6 +9,7 @@
     "state": "ok",
     "message": "Gemini CLI available (0.19.4)",
     "version": "0.19.4",
+    "lastChecked": 1765598279052,
     "lastChecked": 1765486025928,
     "mode": "cli"
   },
