@@ -3,6 +3,7 @@
 from .logger import setup_logger, get_logger
 from .indicators import TechnicalIndicators
 from .decorators import timing_decorator, exception_handler
+from .portfolio_formatter import PortfolioFormatter
 
 __all__ = [
     'setup_logger',
@@ -10,4 +11,5 @@ __all__ = [
     'TechnicalIndicators',
     'timing_decorator',
     'exception_handler',
+    'PortfolioFormatter',
 ]
