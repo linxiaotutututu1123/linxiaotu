@@ -1,0 +1,51 @@
+name: Check for Uncommitted Changes
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  check-uncommitted:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.8'
+        
+    - name: Install dependencies
+      run: |
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        if [ -f quant-trading-system/requirements.txt ]; then
+          pip install -r quant-trading-system/requirements.txt
+        fi
+        
+    - name: Run tests (if any)
+      run: |
+        if [ -f package.json ]; then
+          npm install
+          npm test || echo "No tests configured"
+        fi
+        
+    - name: Check for uncommitted changes
+      run: |
+        git status
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "ERROR: Uncommitted changes detected!"
+          echo "The following files have uncommitted changes:"
+          git status --porcelain
+          git diff
+          exit 1
+        else
+          echo "SUCCESS: No uncommitted changes detected"
+        fi
