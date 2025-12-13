@@ -9,10 +9,6 @@ from typing import Dict, List, Any
 class PortfolioFormatter:
     """Formatter for portfolio statistics and backtest results."""
     
-    def __init__(self):
-        """Initialize PortfolioFormatter."""
-        pass
-    
     def format_backtest_results(self, results: Dict[str, Any]) -> str:
         """Format backtest results in a readable table format.
         
